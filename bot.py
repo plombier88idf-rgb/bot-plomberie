@@ -1,10 +1,5 @@
 import os
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    BotCommand,
-)
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, BotCommand
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -19,10 +14,6 @@ ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 
 CATEGORY, SUBSERVICE, QUESTIONS, MEDIA, CITY, PHONE, AVAILABILITY, CONFIRM = range(8)
 
-
-# =========================================================
-# SERVICES AQUALEO
-# =========================================================
 
 SERVICES = {
 
@@ -51,9 +42,8 @@ SERVICES = {
             "Avez-vous encore de l'eau chaude ?",
         ],
         "🚿 Plus d'eau chaude": [
-            "Quel appareil produit l'eau chaude ? Chaudière, ballon électrique, autre ?",
+            "Quel appareil produit l'eau chaude ? Chaudière, chauffe-eau ou autre ?",
             "Quelle est sa marque ?",
-            "L'appareil est-il alimenté électriquement ?",
             "Voyez-vous un défaut, une fuite ou un voyant inhabituel ?",
         ],
         "❗ Autre urgence": [
@@ -62,32 +52,72 @@ SERVICES = {
     },
 
     "🔧 Plomberie": {
-        "💧 Fuite robinet / raccord": [
-            "Où se situe précisément la fuite ?",
-            "La fuite est-elle permanente ?",
-            "Pouvez-vous isoler ou couper l'eau ?",
-        ],
-        "🧱 Fuite canalisation": [
-            "La canalisation est-elle visible ou encastrée ?",
-            "Savez-vous s'il s'agit d'eau chaude ou d'eau froide ?",
-            "Pouvez-vous couper l'eau ?",
-        ],
         "🚰 Robinetterie": [
             "Quel équipement est concerné ?",
             "Souhaitez-vous une réparation ou un remplacement ?",
             "Connaissez-vous la marque du matériel ?",
-        ],
-        "🧺 Machine à laver / lave-vaisselle": [
-            "Souhaitez-vous créer, déplacer ou réparer l'alimentation ?",
-            "Une évacuation existe-t-elle déjà à proximité ?",
         ],
         "🚽 WC": [
             "Quel est le problème avec le WC ?",
             "Est-il suspendu ou posé au sol ?",
             "Souhaitez-vous une réparation ou un remplacement ?",
         ],
+        "🧺 Machine à laver / lave-vaisselle": [
+            "Souhaitez-vous créer, déplacer ou réparer l'alimentation ?",
+            "Une évacuation existe-t-elle déjà à proximité ?",
+        ],
+        "🚰 Création arrivée / évacuation": [
+            "Quel équipement souhaitez-vous raccorder ?",
+            "Une alimentation ou une évacuation existe-t-elle à proximité ?",
+        ],
         "🔧 Autre plomberie": [
             "Décrivez les travaux ou le problème rencontré.",
+        ],
+    },
+
+    "💧 Fuite / Réparation": {
+        "🚰 Robinet / mitigeur": [
+            "Quel équipement fuit ? Cuisine, lavabo, douche, baignoire...",
+            "La fuite est-elle permanente ?",
+            "Pouvez-vous couper ou isoler l'arrivée d'eau concernée ?",
+        ],
+        "🔩 Raccord / flexible": [
+            "Où se situe le raccord ou flexible qui fuit ?",
+            "La fuite est-elle importante ou seulement goutte à goutte ?",
+            "Pouvez-vous couper l'eau ?",
+        ],
+        "🚽 Fuite WC": [
+            "Où voyez-vous la fuite ? Cuvette, réservoir, alimentation ou sol ?",
+            "Le WC est-il suspendu ou posé au sol ?",
+            "Pouvez-vous utiliser le WC actuellement ?",
+        ],
+        "🚿 Douche / baignoire": [
+            "Où voyez-vous la fuite ? Robinetterie, évacuation, joints ou dessous ?",
+            "La fuite apparaît-elle uniquement pendant l'utilisation ?",
+        ],
+        "🚰 Évier / lavabo": [
+            "La fuite vient-elle du robinet, siphon, évacuation ou alimentation ?",
+            "La fuite apparaît-elle uniquement pendant l'utilisation ?",
+        ],
+        "🚿 Chauffe-eau": [
+            "Où voyez-vous la fuite ? Groupe de sécurité, raccord, cuve ou dessous du ballon ?",
+            "La fuite est-elle permanente ?",
+            "Pouvez-vous couper l'arrivée d'eau du chauffe-eau ?",
+        ],
+        "♨️ Radiateur / chauffage": [
+            "Où voyez-vous la fuite ? Robinet, purgeur, raccord ou radiateur ?",
+            "La pression de la chaudière baisse-t-elle ?",
+            "Pouvez-vous isoler le radiateur ?",
+        ],
+        "🔧 Canalisation visible": [
+            "Où se trouve la canalisation qui fuit ?",
+            "Savez-vous s'il s'agit d'eau chaude ou d'eau froide ?",
+            "Pouvez-vous couper l'eau ?",
+        ],
+        "❓ Autre fuite visible": [
+            "Décrivez précisément où vous voyez l'eau et ce qui semble fuir.",
+            "La fuite est-elle toujours active ?",
+            "Pouvez-vous couper l'eau ?",
         ],
     },
 
@@ -116,10 +146,10 @@ SERVICES = {
         "🥶 Radiateur froid": [
             "Un seul radiateur est concerné ou plusieurs ?",
             "Le radiateur chauffe-t-il partiellement ?",
-            "Quel type de chaudière ou chauffage possédez-vous ?",
+            "Quel type de chauffage possédez-vous ?",
         ],
         "💧 Radiateur qui fuit": [
-            "La fuite semble-t-elle venir du robinet, purgeur ou radiateur ?",
+            "La fuite vient-elle du robinet, purgeur, raccord ou radiateur ?",
             "Pouvez-vous isoler le radiateur ?",
         ],
         "🔄 Remplacement radiateur": [
@@ -158,7 +188,7 @@ SERVICES = {
     "🔥 Gaz / Mise aux normes": {
         "🛡 Mise en conformité gaz": [
             "Pourquoi souhaitez-vous une mise en conformité ?",
-            "Disposez-vous d'un rapport ou diagnostic mentionnant des anomalies ?",
+            "Disposez-vous d'un diagnostic ou rapport mentionnant des anomalies ?",
             "Quel appareil est alimenté au gaz ?",
         ],
         "🔧 Modification canalisation gaz": [
@@ -191,12 +221,12 @@ SERVICES = {
 
     "🌀 Débouchage": {
         "🚰 Évier / lavabo": [
-            "L'eau est-elle totalement bloquée ou s'écoule-t-elle lentement ?",
+            "L'eau est-elle bloquée ou s'écoule-t-elle lentement ?",
             "D'autres équipements sont-ils également bouchés ?",
-            "Avez-vous déjà utilisé un produit ou essayé de déboucher ?",
+            "Avez-vous déjà essayé de déboucher ?",
         ],
         "🚿 Douche / baignoire": [
-            "L'eau est-elle totalement bloquée ou s'écoule-t-elle lentement ?",
+            "L'eau est-elle bloquée ou s'écoule-t-elle lentement ?",
             "L'eau remonte-t-elle dans un autre équipement ?",
         ],
         "🚽 WC": [
@@ -206,7 +236,7 @@ SERVICES = {
         ],
         "🏠 Canalisation générale": [
             "Quels équipements sont touchés ?",
-            "Disposez-vous d'un regard extérieur ou d'un accès à la canalisation ?",
+            "Disposez-vous d'un regard ou d'un accès à la canalisation ?",
             "Le problème concerne-t-il toute l'habitation ?",
         ],
         "🏢 Colonne": [
@@ -215,7 +245,7 @@ SERVICES = {
             "Où se situe l'accès à la colonne ?",
         ],
         "🌧 Gouttière / descente EP": [
-            "Le bouchon concerne-t-il une gouttière ou une descente d'eau pluviale ?",
+            "Le bouchon concerne-t-il une gouttière ou une descente ?",
             "À quelle hauteur approximative se situe l'installation ?",
             "L'accès est-il possible avec une échelle ?",
         ],
@@ -232,7 +262,7 @@ SERVICES = {
             "Le problème revient-il régulièrement ?",
         ],
         "💥 Recherche casse / défaut": [
-            "Pourquoi suspectez-vous une casse ou un défaut de canalisation ?",
+            "Pourquoi suspectez-vous une casse ou un défaut ?",
             "La canalisation est-elle intérieure ou extérieure ?",
         ],
         "🏠 Contrôle canalisation": [
@@ -258,13 +288,13 @@ SERVICES = {
             "À quelle fréquence devez-vous remettre de l'eau ?",
         ],
         "📋 Recherche pour assurance": [
-            "Disposez-vous d'une demande ou d'un dossier de votre assurance ?",
+            "Disposez-vous d'une demande de votre assurance ?",
             "Où les dégâts sont-ils visibles ?",
             "Connaissez-vous l'origine supposée de la fuite ?",
         ],
         "❓ Origine inconnue": [
             "Décrivez les signes qui vous font penser à une fuite.",
-            "Le compteur d'eau tourne-t-il lorsque tous les robinets sont fermés ?",
+            "Le compteur tourne-t-il lorsque tous les robinets sont fermés ?",
         ],
     },
 
@@ -291,7 +321,7 @@ SERVICES = {
     "🌧 Gouttières": {
         "🌀 Débouchage gouttière": [
             "La gouttière déborde-t-elle lorsqu'il pleut ?",
-            "Le problème semble-t-il venir de la gouttière ou de la descente ?",
+            "Le problème vient-il de la gouttière ou de la descente ?",
             "À quelle hauteur approximative se trouve-t-elle ?",
         ],
         "🧹 Nettoyage gouttières": [
@@ -408,13 +438,8 @@ SERVICES = {
 }
 
 
-# =========================================================
-# CLAVIERS
-# =========================================================
-
 def make_keyboard(items, columns=2, extra=None):
     rows = []
-
     for i in range(0, len(items), columns):
         rows.append(items[i:i + columns])
 
@@ -433,13 +458,9 @@ def subservice_keyboard(category):
     return make_keyboard(
         list(SERVICES[category].keys()),
         1,
-        ["🏠 Accueil"]
+        ["🏠 Accueil"],
     )
 
-
-# =========================================================
-# ACCUEIL
-# =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
@@ -447,9 +468,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Bonjour et bienvenue chez Plomberie Aqualeo.\n\n"
         "🔧 Plomberie • Chauffage • Dépannage • Rénovation\n\n"
-        "Je vais vous poser quelques questions rapides afin de comprendre "
+        "Quelques questions rapides vont nous permettre de comprendre "
         "votre demande et de prévoir le matériel nécessaire avant l'intervention.\n\n"
-        "📸 Vous pourrez également envoyer des photos ou vidéos.\n\n"
+        "📸 Vous pourrez envoyer plusieurs photos ou vidéos.\n\n"
         "👇 Sélectionnez votre besoin :",
         reply_markup=category_keyboard(),
     )
@@ -457,19 +478,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return CATEGORY
 
 
-# =========================================================
-# ID ADMIN
-# =========================================================
-
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"Votre identifiant Telegram est :\n\n{update.effective_chat.id}"
     )
 
-
-# =========================================================
-# CATEGORIE
-# =========================================================
 
 async def choose_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -483,11 +496,10 @@ async def choose_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["category"] = text
 
-    # Avertissement spécial gaz
     if text == "🔥 Gaz / Mise aux normes":
         await update.message.reply_text(
             "⚠️ SÉCURITÉ GAZ\n\n"
-            "En cas de forte odeur de gaz ou de danger immédiat : "
+            "En cas d'odeur importante ou de danger immédiat, "
             "n'utilisez pas de flamme, évitez les interrupteurs électriques, "
             "aérez si cela peut être fait sans danger, fermez l'arrivée de gaz "
             "si possible et contactez le service d'urgence gaz compétent."
@@ -501,10 +513,6 @@ async def choose_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SUBSERVICE
 
 
-# =========================================================
-# SOUS-SERVICE
-# =========================================================
-
 async def choose_subservice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
@@ -514,9 +522,7 @@ async def choose_subservice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     category = context.user_data.get("category")
 
     if not category or text not in SERVICES[category]:
-        await update.message.reply_text(
-            "Merci d'utiliser les boutons proposés."
-        )
+        await update.message.reply_text("Merci d'utiliser les boutons proposés.")
         return SUBSERVICE
 
     context.user_data["subservice"] = text
@@ -524,12 +530,11 @@ async def choose_subservice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["question_index"] = 0
     context.user_data["media"] = []
 
-    # Sécurité spécifique suspicion gaz
     if text == "⚠️ Odeur / suspicion de gaz":
         await update.message.reply_text(
             "🚨 Une suspicion de fuite de gaz peut présenter un danger immédiat.\n\n"
-            "Si l'odeur est importante : quittez les lieux si nécessaire et "
-            "contactez le service d'urgence gaz compétent depuis un endroit sûr.\n\n"
+            "En cas d'odeur importante, éloignez-vous si nécessaire et contactez "
+            "le service d'urgence gaz compétent depuis un endroit sûr.\n\n"
             "Cette messagerie ne remplace pas un service d'urgence."
         )
 
@@ -542,10 +547,6 @@ async def choose_subservice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return QUESTIONS
 
-
-# =========================================================
-# QUESTIONS
-# =========================================================
 
 async def answer_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -575,64 +576,46 @@ async def answer_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "📸 PHOTOS / VIDÉOS\n\n"
-        "Envoyez maintenant une ou plusieurs photos ou vidéos du problème.\n\n"
-        "💡 Prenez si possible :\n"
-        "• une vue générale\n"
-        "• une vue rapprochée du problème\n"
-        "• la marque / référence / plaque signalétique de l'appareil\n"
-        "• les raccordements ou canalisations concernés\n\n"
-        "Vous pouvez en envoyer plusieurs.\n"
+        "Envoyez une ou plusieurs photos ou vidéos afin de nous aider "
+        "à préparer l'intervention.\n\n"
+        "Si possible :\n"
+        "• vue générale\n"
+        "• vue rapprochée du problème\n"
+        "• plaque signalétique / référence\n"
+        "• raccordements ou canalisations concernés\n\n"
         "Quand vous avez terminé, appuyez sur « ✅ Terminé ».",
         reply_markup=make_keyboard(
             [],
-            extra=[
-                "✅ Terminé",
-                "⏭ Continuer sans photo",
-                "🏠 Accueil",
-            ],
+            extra=["✅ Terminé", "⏭ Continuer sans photo", "🏠 Accueil"],
         ),
     )
 
     return MEDIA
 
 
-# =========================================================
-# PHOTOS ET VIDEOS
-# =========================================================
-
 async def receive_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file_id = update.message.photo[-1].file_id
-
     context.user_data["media"].append({
         "type": "photo",
-        "file_id": file_id,
+        "file_id": update.message.photo[-1].file_id,
     })
 
-    count = len(context.user_data["media"])
-
     await update.message.reply_text(
-        f"✅ Photo reçue ({count} fichier(s)).\n\n"
+        f"✅ Photo reçue ({len(context.user_data['media'])} fichier(s)).\n"
         "Vous pouvez en envoyer d'autres ou appuyer sur « ✅ Terminé »."
     )
-
     return MEDIA
 
 
 async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file_id = update.message.video.file_id
-
     context.user_data["media"].append({
         "type": "video",
-        "file_id": file_id,
+        "file_id": update.message.video.file_id,
     })
 
-    count = len(context.user_data["media"])
-
     await update.message.reply_text(
-        f"✅ Vidéo reçue ({count} fichier(s)).\n\n"
-        "Vous pouvez continuer ou appuyer sur « ✅ Terminé »."
+        f"✅ Vidéo reçue ({len(context.user_data['media'])} fichier(s)).\n"
+        "Vous pouvez en envoyer d'autres ou appuyer sur « ✅ Terminé »."
     )
-
     return MEDIA
 
 
@@ -644,7 +627,7 @@ async def finish_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text not in ["✅ Terminé", "⏭ Continuer sans photo"]:
         await update.message.reply_text(
-            "📸 Envoyez une photo/vidéo ou utilisez un bouton."
+            "📸 Envoyez une photo/vidéo ou utilisez un des boutons."
         )
         return MEDIA
 
@@ -656,41 +639,27 @@ async def finish_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return CITY
 
 
-# =========================================================
-# VILLE
-# =========================================================
-
 async def save_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-
-    if text == "🏠 Accueil":
+    if update.message.text == "🏠 Accueil":
         return await start(update, context)
 
-    context.user_data["city"] = text
+    context.user_data["city"] = update.message.text
 
     contact_button = KeyboardButton(
         "📱 Partager mon numéro",
-        request_contact=True
+        request_contact=True,
     )
 
     await update.message.reply_text(
-        "📞 Quel numéro de téléphone pouvons-nous utiliser pour vous contacter ?\n\n"
-        "Vous pouvez l'écrire ou utiliser le bouton ci-dessous.",
+        "📞 Quel numéro pouvons-nous utiliser pour vous contacter ?",
         reply_markup=ReplyKeyboardMarkup(
-            [
-                [contact_button],
-                ["🏠 Accueil"],
-            ],
+            [[contact_button], ["🏠 Accueil"]],
             resize_keyboard=True,
         ),
     )
 
     return PHONE
 
-
-# =========================================================
-# TELEPHONE
-# =========================================================
 
 async def save_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["phone"] = update.message.contact.phone_number
@@ -699,29 +668,18 @@ async def save_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def save_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-
-    if text == "🏠 Accueil":
+    if update.message.text == "🏠 Accueil":
         return await start(update, context)
 
-    context.user_data["phone"] = text
+    context.user_data["phone"] = update.message.text
     await ask_availability(update)
-
     return AVAILABILITY
 
-
-# =========================================================
-# DISPONIBILITE
-# =========================================================
 
 async def ask_availability(update: Update):
     await update.message.reply_text(
         "🗓 Quand souhaitez-vous une intervention ?\n\n"
-        "Vous pouvez indiquer par exemple :\n"
-        "• Dès que possible\n"
-        "• Aujourd'hui après 17h\n"
-        "• Demain matin\n"
-        "• Cette semaine",
+        "Exemple : dès que possible, aujourd'hui après 17h, demain matin...",
         reply_markup=make_keyboard(
             ["⚡ Dès que possible"],
             1,
@@ -731,40 +689,27 @@ async def ask_availability(update: Update):
 
 
 async def save_availability(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-
-    if text == "🏠 Accueil":
+    if update.message.text == "🏠 Accueil":
         return await start(update, context)
 
-    context.user_data["availability"] = text
-
-    summary = customer_summary(context.user_data)
+    context.user_data["availability"] = update.message.text
 
     await update.message.reply_text(
-        "📋 RÉCAPITULATIF DE VOTRE DEMANDE\n\n"
-        + summary +
-        "\n\n"
-        "Vérifiez les informations puis appuyez sur "
-        "« ✅ Envoyer ma demande ».",
+        "📋 RÉCAPITULATIF\n\n"
+        + customer_summary(context.user_data)
+        + "\n\nVérifiez les informations avant l'envoi.",
         reply_markup=make_keyboard(
             [],
-            extra=[
-                "✅ Envoyer ma demande",
-                "🔄 Recommencer",
-            ],
+            extra=["✅ Envoyer ma demande", "🔄 Recommencer"],
         ),
     )
 
     return CONFIRM
 
 
-# =========================================================
-# RECAPITULATIF
-# =========================================================
-
 def customer_summary(data):
     lines = [
-        f"{data.get('category', '')}",
+        data.get("category", ""),
         f"➡️ {data.get('subservice', '')}",
         "",
     ]
@@ -775,13 +720,12 @@ def customer_summary(data):
         lines.append("")
 
     photos = sum(
-        1 for media in data.get("media", [])
-        if media["type"] == "photo"
+        1 for item in data.get("media", [])
+        if item["type"] == "photo"
     )
-
     videos = sum(
-        1 for media in data.get("media", [])
-        if media["type"] == "video"
+        1 for item in data.get("media", [])
+        if item["type"] == "video"
     )
 
     lines.extend([
@@ -797,30 +741,20 @@ def customer_summary(data):
 
 def admin_summary(update, data):
     user = update.effective_user
+    username = f"@{user.username}" if user.username else "Non renseigné"
 
-    username = (
-        f"@{user.username}"
-        if user.username
-        else "Non renseigné"
-    )
-
-    urgent = (
-        "🚨🚨 ASTREINTE / URGENCE 🚨🚨\n\n"
-        if data.get("category") == "🚨 Astreinte / Urgence"
-        else "🔔 NOUVELLE DEMANDE AQUALEO\n\n"
-    )
+    if data.get("category") == "🚨 Astreinte / Urgence":
+        header = "🚨🚨 ASTREINTE / URGENCE AQUALEO 🚨🚨"
+    else:
+        header = "🔔 NOUVELLE DEMANDE AQUALEO"
 
     return (
-        urgent
-        + f"👤 Client Telegram : {user.full_name}\n"
-        + f"✈️ Compte : {username}\n\n"
+        f"{header}\n\n"
+        f"👤 Client : {user.full_name}\n"
+        f"✈️ Telegram : {username}\n\n"
         + customer_summary(data)
     )
 
-
-# =========================================================
-# ENVOI DE LA DEMANDE
-# =========================================================
 
 async def confirm_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -846,7 +780,6 @@ async def confirm_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         chat_id=int(ADMIN_CHAT_ID),
                         photo=media["file_id"],
                     )
-
                 elif media["type"] == "video":
                     await context.bot.send_video(
                         chat_id=int(ADMIN_CHAT_ID),
@@ -857,30 +790,20 @@ async def confirm_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             print(f"Erreur envoi Aqualeo : {error}")
 
     await update.message.reply_text(
-        "✅ DEMANDE ENVOYÉE\n\n"
-        "Merci. Plomberie Aqualeo a bien reçu les informations "
-        "concernant votre demande.\n\n"
-        "Les éléments transmis permettront de mieux préparer "
-        "l'intervention et le matériel nécessaire.\n\n"
+        "✅ Votre demande a bien été enregistrée.\n\n"
+        "Les informations et médias transmis permettront à Plomberie Aqualeo "
+        "de mieux préparer l'intervention et le matériel nécessaire.\n\n"
         "🔧 Plomberie Aqualeo",
-        reply_markup=make_keyboard(
-            ["🏠 Nouvelle demande"],
-            1
-        ),
+        reply_markup=make_keyboard(["🏠 Nouvelle demande"], 1),
     )
 
     context.user_data.clear()
-
     return CATEGORY
 
 
 async def new_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await start(update, context)
 
-
-# =========================================================
-# COMMANDES TELEGRAM
-# =========================================================
 
 async def post_init(application):
     await application.bot.set_my_commands([
@@ -889,12 +812,7 @@ async def post_init(application):
     ])
 
 
-# =========================================================
-# DEMARRAGE
-# =========================================================
-
 def main():
-
     if not TOKEN:
         raise RuntimeError("BOT_TOKEN n'est pas configuré.")
 
@@ -914,72 +832,36 @@ def main():
                 new_request,
             ),
         ],
-
         states={
             CATEGORY: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    choose_category,
-                )
+                MessageHandler(filters.TEXT & ~filters.COMMAND, choose_category)
             ],
-
             SUBSERVICE: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    choose_subservice,
-                )
+                MessageHandler(filters.TEXT & ~filters.COMMAND, choose_subservice)
             ],
-
             QUESTIONS: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    answer_question,
-                )
+                MessageHandler(filters.TEXT & ~filters.COMMAND, answer_question)
             ],
-
             MEDIA: [
                 MessageHandler(filters.PHOTO, receive_photo),
                 MessageHandler(filters.VIDEO, receive_video),
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    finish_media,
-                ),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, finish_media),
             ],
-
             CITY: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    save_city,
-                )
+                MessageHandler(filters.TEXT & ~filters.COMMAND, save_city)
             ],
-
             PHONE: [
                 MessageHandler(filters.CONTACT, save_contact),
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    save_phone,
-                ),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, save_phone),
             ],
-
             AVAILABILITY: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    save_availability,
-                )
+                MessageHandler(filters.TEXT & ~filters.COMMAND, save_availability)
             ],
-
             CONFIRM: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    confirm_request,
-                )
+                MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_request)
             ],
         },
-
-        fallbacks=[
-            CommandHandler("start", start),
-        ],
-
+        fallbacks=[CommandHandler("start", start)],
         allow_reentry=True,
     )
 
