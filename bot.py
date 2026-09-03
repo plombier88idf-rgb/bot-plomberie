@@ -1,4 +1,7 @@
+import csv
 import os
+from datetime import datetime, timezone
+from pathlib import Path
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, BotCommand
 from telegram.ext import (
     Application,
@@ -12,7 +15,9 @@ from telegram.ext import (
 TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 
-CATEGORY, SUBSERVICE, QUESTIONS, MEDIA, CITY, PHONE, AVAILABILITY, CONFIRM = range(8)
+CATEGORY, SUBSERVICE, QUESTIONS, MEDIA, ADDRESS, POSTAL_CITY, PHONE, AVAILABILITY, CONFIRM = range(9)
+
+CLIENTS_CSV = Path(os.environ.get("CLIENTS_CSV", "clients.csv"))
 
 
 SERVICES = {
@@ -632,18 +637,34 @@ async def finish_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return MEDIA
 
     await update.message.reply_text(
-        "📍 Dans quelle ville doit avoir lieu l'intervention ?",
+        "📍 Quelle est l’adresse exacte de l’intervention ?\n\n"
+        "Exemple : 12 rue Victor-Hugo",
         reply_markup=make_keyboard([], extra=["🏠 Accueil"]),
     )
 
-    return CITY
+    return ADDRESS
 
 
-async def save_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def save_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "🏠 Accueil":
         return await start(update, context)
 
-    context.user_data["city"] = update.message.text
+    context.user_data["address"] = update.message.text.strip()
+
+    await update.message.reply_text(
+        "🏙 Quel est le code postal et la ville ?\n\n"
+        "Exemple : 91800 Brunoy",
+        reply_markup=make_keyboard([], extra=["🏠 Accueil"]),
+    )
+
+    return POSTAL_CITY
+
+
+async def save_postal_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "🏠 Accueil":
+        return await start(update, context)
+
+    context.user_data["postal_city"] = update.message.text.strip()
 
     contact_button = KeyboardButton(
         "📱 Partager mon numéro",
@@ -659,6 +680,43 @@ async def save_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     return PHONE
+
+
+def save_request_csv(update: Update, data):
+    user = update.effective_user
+    CLIENTS_CSV.parent.mkdir(parents=True, exist_ok=True)
+    is_new = not CLIENTS_CSV.exists() or CLIENTS_CSV.stat().st_size == 0
+
+    answers = " | ".join(
+        f"{item['question']} : {item['answer']}"
+        for item in data.get("answers", [])
+    )
+    photos = sum(1 for item in data.get("media", []) if item["type"] == "photo")
+    videos = sum(1 for item in data.get("media", []) if item["type"] == "video")
+
+    with CLIENTS_CSV.open("a", newline="", encoding="utf-8-sig") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=[
+            "date_utc", "telegram_id", "nom", "username", "categorie",
+            "service", "reponses", "adresse", "code_postal_ville",
+            "telephone", "disponibilite", "photos", "videos",
+        ])
+        if is_new:
+            writer.writeheader()
+        writer.writerow({
+            "date_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "telegram_id": user.id,
+            "nom": user.full_name,
+            "username": f"@{user.username}" if user.username else "",
+            "categorie": data.get("category", ""),
+            "service": data.get("subservice", ""),
+            "reponses": answers,
+            "adresse": data.get("address", ""),
+            "code_postal_ville": data.get("postal_city", ""),
+            "telephone": data.get("phone", ""),
+            "disponibilite": data.get("availability", ""),
+            "photos": photos,
+            "videos": videos,
+        })
 
 
 async def save_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -729,7 +787,8 @@ def customer_summary(data):
     )
 
     lines.extend([
-        f"📍 Ville : {data.get('city', '')}",
+        f"📍 Adresse : {data.get('address', '')}",
+        f"🏙 Code postal / ville : {data.get('postal_city', '')}",
         f"📞 Téléphone : {data.get('phone', '')}",
         f"🗓 Disponibilité : {data.get('availability', '')}",
         f"📸 Photos : {photos}",
@@ -766,6 +825,11 @@ async def confirm_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return CONFIRM
 
     data = context.user_data
+
+    try:
+        save_request_csv(update, data)
+    except Exception as error:
+        print(f"Erreur enregistrement CSV : {error}")
 
     if ADMIN_CHAT_ID:
         try:
@@ -805,10 +869,28 @@ async def new_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await start(update, context)
 
 
+async def clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not ADMIN_CHAT_ID or str(update.effective_chat.id) != str(ADMIN_CHAT_ID):
+        await update.message.reply_text("⛔ Cette commande est réservée à Aqualeo.")
+        return
+
+    if not CLIENTS_CSV.exists() or CLIENTS_CSV.stat().st_size == 0:
+        await update.message.reply_text("Aucune demande client enregistrée pour le moment.")
+        return
+
+    with CLIENTS_CSV.open("rb") as csv_file:
+        await update.message.reply_document(
+            document=csv_file,
+            filename="clients_aqualeo.csv",
+            caption="📋 Historique des demandes clients Aqualeo",
+        )
+
+
 async def post_init(application):
     await application.bot.set_my_commands([
         BotCommand("start", "Accueil Aqualeo"),
         BotCommand("myid", "Mon identifiant Telegram"),
+        BotCommand("clients", "Historique clients Aqualeo"),
     ])
 
 
@@ -847,8 +929,11 @@ def main():
                 MessageHandler(filters.VIDEO, receive_video),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, finish_media),
             ],
-            CITY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, save_city)
+            ADDRESS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, save_address)
+            ],
+            POSTAL_CITY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, save_postal_city)
             ],
             PHONE: [
                 MessageHandler(filters.CONTACT, save_contact),
@@ -866,6 +951,7 @@ def main():
     )
 
     application.add_handler(CommandHandler("myid", myid))
+    application.add_handler(CommandHandler("clients", clients))
     application.add_handler(conversation)
 
     application.run_polling()
