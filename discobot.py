@@ -621,7 +621,7 @@ async def complete_current_device(session, chat_id, context):
 async def advance(session, chat_id, value, context):
     idx = session["current_step"]
     save_current_value(session, value)
-    session["current_step"] += 1
+    session["current_step"] = next_missing_step(session, idx + 1)
     save_session(session)
 
     if session["current_step"] >= len(ALL_STEPS):
@@ -669,9 +669,14 @@ async def nouveau(update: Update, context: ContextTypes.DEFAULT_TYPE):
     create_session(user_id, chat_id)
     session = get_session(user_id, chat_id)
     await update.effective_message.reply_text(
-        "🆕 Nouveau contrôle créé. On commence par le dossier client/site."
+        "🆕 Nouveau dossier / contrôle créé.\n\n"
+        "Tu peux commencer de 3 façons :\n"
+        "• 📸 envoie directement une photo du dossier / ordre d'intervention ;\n"
+        "• ✍️ écris toutes les infos en une phrase (site + adresse + contact...) ;\n"
+        "• ou réponds simplement aux questions une par une.\n\n"
+        "Exemple : « Lycée Lucie Aubrac 51 rue Victor Hugo 93500 Pantin, 2 disconnecteurs ».\n"
+        "Discobot range les informations et ne redemande que ce qui manque."
     )
-    await send_step(chat_id, session, context)
 
 
 async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -679,7 +684,11 @@ async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not session:
         await update.effective_message.reply_text("Aucun contrôle en cours. Utilise /nouveau.")
         return
-    await send_step(update.effective_chat.id, session, context)
+    session["current_step"] = next_missing_step(session, session["current_step"])
+    save_session(session)
+    await update.effective_message.reply_text(build_intake_preview(session["data"]))
+    if session["current_step"] < len(ALL_STEPS):
+        await send_step(update.effective_chat.id, session, context)
 
 
 async def annuler(update: Update, context: ContextTypes.DEFAULT_TYPE):
