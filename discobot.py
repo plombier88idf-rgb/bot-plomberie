@@ -286,22 +286,32 @@ def guided_prompt(session, key, base_prompt):
         "vanne_amont": (
             "🧰 OBJECTIF : vérifier que la vanne AMONT isole réellement, pas seulement qu'elle tourne.\n"
             "1. Repère le sens de l'eau avec la flèche du disconnecteur. La vanne avant la flèche est l'amont.\n"
-            "2. Avant toute coupure, vérifie que l'arrêt d'eau est autorisé sur le site.\n"
-            "3. Si tu utilises la mallette, raccorde-la uniquement sur les prises de contrôle prévues et purge les flexibles selon sa notice. "
+            "2. AVANT DE COUPER : demande au contact du site : « Est-ce que je peux interrompre cette alimentation quelques minutes ? "
+            "Est-ce qu'un équipement, un process, une production, un remplissage de chaudière ou un réseau sensible a besoin de cette eau ? » "
+            "Si c'est un réseau incendie/sécurité ou si le contact n'est pas sûr, ne coupe pas sans procédure/autorisation du site.\n"
+            "3. Raccorde la mallette sur les prises de contrôle identifiées du disconnecteur, puis purge les flexibles selon la notice de la mallette. "
             "Ne desserre jamais un raccord sous pression.\n"
-            "4. Ferme la vanne AMONT lentement. Crée ensuite la différence de pression prévue par la procédure constructeur via la prise de contrôle, "
-            "puis observe si le côté isolé continue à être réalimenté.\n"
-            "5. Si la pression remonte / l'eau continue à passer alors que la vanne est fermée : sélectionne « Laisse passer ». "
-            "Si elle isole correctement : « Ferme bien ». Si tu n'es pas certain : « Non vérifiable »."
+            "4. Ferme la vanne AMONT lentement.\n"
+            "5. Pour vérifier si elle ferme vraiment : sur le côté APRÈS la vanne amont (côté disconnecteur), utilise la prise de contrôle prévue "
+            "et la purge/robinet de la mallette pour faire baisser nettement la pression. Fais-le doucement vers un récipient ou une évacuation adaptée.\n"
+            "6. Referme ensuite la purge et observe la pression pendant environ 30 à 60 secondes.\n"
+            "   • Si la pression reste basse/stable : la vanne amont isole correctement.\n"
+            "   • Si la pression remonte progressivement alors que la vanne est fermée : elle laisse passer.\n"
+            "7. Choisis ensuite « Ferme bien », « Laisse passer » ou « Non vérifiable ». "
+            "Si la prise de contrôle n'est pas clairement identifiée, ne devine pas : marque Non vérifiable."
         ),
         "vanne_aval": (
             "🧰 OBJECTIF : vérifier que la vanne AVAL isole réellement.\n"
             "1. Repère la vanne située après le disconnecteur dans le sens de la flèche.\n"
-            "2. Branche d'abord l'appareil de contrôle sur les prises prévues si le contrôle l'exige ; ne démonte rien sous pression.\n"
-            "3. Ferme la vanne AVAL lentement. Observe les pressions et l'écoulement à la décharge pendant la séquence de contrôle.\n"
-            "4. Si, après création d'une différence de pression, le côté isolé est réalimenté ou la pression remonte anormalement : "
-            "la vanne laisse passer. Sinon elle ferme correctement.\n"
-            "👉 Tu n'as plus à écrire une explication : choisis simplement le bouton correspondant."
+            "2. AVANT DE COUPER : confirme avec l'interlocuteur qu'aucun équipement ni service n'a besoin de cette alimentation pendant l'essai. "
+            "Sur un réseau incendie/sécurité, ne coupe pas sans autorisation et procédure du site.\n"
+            "3. Raccorde la mallette sur les prises prévues et purge les flexibles. Ne démonte rien sous pression.\n"
+            "4. Ferme la vanne AVAL lentement.\n"
+            "5. Si tu disposes d'un point de purge ou d'un robinet sûr situé APRÈS cette vanne, fais chuter légèrement la pression côté installation, "
+            "puis referme ce point. Observe ensuite si la pression se reconstitue alors que la vanne aval est censée être fermée.\n"
+            "6. Si la pression remonte côté isolé, la vanne laisse passer. Si elle reste stable, la fermeture est correcte. "
+            "S'il n'existe aucun point sûr permettant ce test, choisis « Non vérifiable » plutôt que de conclure au hasard.\n"
+            "👉 Choisis ensuite simplement le bouton correspondant."
         ),
         "clapets": (
             "🔧 Ne démonte pas tout de suite. On contrôle d'abord le comportement. "
@@ -321,8 +331,12 @@ def guided_prompt(session, key, base_prompt):
             "Écris la valeur réelle avec l'unité. Si aucune prise n'est identifiable, choisis « Non vérifiable » plutôt que d'inventer."
         ),
         "differentiel": (
-            "📐 Utilise le manomètre différentiel prévu pour comparer l'amont et la zone intermédiaire. "
-            "Saisis la valeur réellement lue. Discobot ne déclarera pas l'appareil conforme uniquement à partir d'une valeur isolée."
+            "📐 OBJECTIF : mesurer l'écart de pression entre l'amont et la zone intermédiaire.\n"
+            "1. Identifie clairement les deux prises concernées d'après le marquage/notice du modèle.\n"
+            "2. Raccorde les deux voies du manomètre différentiel à ces prises et purge l'air des flexibles.\n"
+            "3. Ouvre les prises de contrôle doucement jusqu'à obtenir une lecture stable.\n"
+            "4. La valeur affichée est le différentiel : note-la telle quelle avec son unité (mbar ou bar).\n"
+            "5. Discobot compare ensuite cette valeur au critère du modèle identifié ; il ne doit jamais appliquer un seuil d'un autre disconnecteur."
         ),
         "essais": (
             "🧪 Fais les essais d'ouverture/fermeture de la décharge et d'étanchéité selon la procédure du modèle. "
