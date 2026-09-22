@@ -34,10 +34,13 @@ ALLOWED_USER_IDS = {
 } if allowed else set()
 
 SITE_STEPS = [
-    ("client", "Client", "text", "Nom du client / organisme ?"),
+    ("client", "Client / organisme", "text", "Qui est le client / organisme ?"),
     ("site", "Site", "text", "Nom du site / bâtiment ?"),
     ("adresse", "Adresse du site", "text", "Adresse complète du site ?"),
-    ("contact_site", "Contact sur place", "text", "Nom / fonction / téléphone du contact sur place, si connu ?"),
+    ("contact_nom", "Contact", "text", "Nom et prénom du contact qui suit le dossier ?"),
+    ("contact_fonction", "Fonction du contact", "text", "Fonction / service du contact ?"),
+    ("contact_email", "E-mail du contact", "text", "E-mail du contact pour devis, rapports et factures ?"),
+    ("contact_tel", "Téléphone du contact", "text", "Numéro de téléphone du contact ?"),
     ("nombre_appareils", "Nombre d'appareils", "text", "Combien de disconnecteurs sont présents sur ce site ?"),
 ]
 
@@ -117,6 +120,10 @@ def blank_data():
         "current_device": {},
         "device_index": 1,
         "visit_type": "CONTROL_DIAGNOSTIC",
+        "dossier_status": "PROSPECT_A_QUALIFIER",
+        "prefill_devices": [],
+        "source_photos": [],
+        "notes_intake": "",
     }
 
 
@@ -176,7 +183,12 @@ def persist_control(session):
         value_text(site.get("client", "")),
         value_text(site.get("site", "")),
         value_text(site.get("adresse", "")),
-        value_text(site.get("contact_site", "")),
+        " | ".join(filter(None, [
+            value_text(site.get("contact_nom", "")),
+            value_text(site.get("contact_fonction", "")),
+            value_text(site.get("contact_email", "")),
+            value_text(site.get("contact_tel", "")),
+        ])),
         total_devices(data),
         json.dumps(data, ensure_ascii=False),
         data.get("visit_type", "CONTROL_DIAGNOSTIC"),
