@@ -860,11 +860,17 @@ async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if clean_value(v) is not None and k in valid_device_keys:
                     bucket[k] = clean_value(v)
 
-    # Si l'analyse n'a pas alimenté le champ attendu, la réponse reste la valeur de ce champ.
-    if not has_answer(bucket.get(key)):
+    # Si le message contient clairement d'autres champs (ex. site + adresse),
+    # on ne le force jamais dans le champ actuellement demandé.
+    smart_found = extraction_has_data(extracted)
+    if not has_answer(bucket.get(key)) and not smart_found:
         bucket[key] = text
 
-    session["current_step"] = next_missing_step(session, idx + 1)
+    if smart_found:
+        restart_at = 0 if idx < len(SITE_STEPS) else len(SITE_STEPS)
+        session["current_step"] = next_missing_step(session, restart_at)
+    else:
+        session["current_step"] = next_missing_step(session, idx + 1)
     save_session(session)
 
     if extraction_has_data(extracted) and idx < len(SITE_STEPS):
