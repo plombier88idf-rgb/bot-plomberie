@@ -7,7 +7,7 @@ import io
 import smtplib
 import textwrap
 from email.message import EmailMessage
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 try:
     from openai import AsyncOpenAI
@@ -39,12 +39,13 @@ SMTP_PORT = int(os.environ.get("SMTP_PORT", "587") or "587")
 SMTP_USER = os.environ.get("SMTP_USER", "").strip()
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
 SMTP_FROM = os.environ.get("SMTP_FROM", SMTP_USER).strip()
-COMPANY_EMAIL = os.environ.get("COMPANY_EMAIL", "").strip()
+COMPANY_EMAIL = os.environ.get("COMPANY_EMAIL", "plombier88idf@gmail.com").strip()
 CONTROL_PRICE_HT = os.environ.get("CONTROL_PRICE_HT", "").strip()
 VAT_RATE = float(os.environ.get("VAT_RATE", "20") or "20")
 COMPANY_NAME = os.environ.get("COMPANY_NAME", "Plomberie Aqualeo").strip()
 COMPANY_PHONE = os.environ.get("COMPANY_PHONE", "06 13 14 20 90").strip()
 COMPANY_SIREN = os.environ.get("COMPANY_SIREN", "").strip()
+QUOTE_FOLLOWUP_DAYS = int(os.environ.get("QUOTE_FOLLOWUP_DAYS", "10") or "10")
 
 allowed = os.environ.get("ALLOWED_TELEGRAM_USER_IDS", "").strip()
 ALLOWED_USER_IDS = {
@@ -138,6 +139,19 @@ def connect_db():
             data TEXT NOT NULL,
             visit_type TEXT NOT NULL DEFAULT 'CONTROL_DIAGNOSTIC',
             created_at TEXT NOT NULL
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS post_control_workflows (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            control_id INTEGER NOT NULL,
+            mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            client_email TEXT,
+            due_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(control_id, mode)
         )
     """)
     ensure_pricing_tables(con)
@@ -1348,7 +1362,16 @@ def build_quote_draft(control):
         return None, "Aucune pièce n'est actuellement diagnostiquée à remplacer."
     if missing:
         lines.append("⚠️ Brouillon uniquement : au moins une pièce n'a pas encore de prix fournisseur vérifié.")
-    lines.append("Aucun prix de vente final n'est inventé automatiquement.")
+    lines.extend([
+        "Aucun prix de vente final n'est inventé automatiquement.",
+        "",
+        "ACCEPTATION CLIENT",
+        "Bon pour accord : ______________________________",
+        "Nom / prénom du signataire : ______________________________",
+        "Fonction : ______________________________",
+        "Date : ____ / ____ / ______",
+        "Signature : ______________________________",
+    ])
     buf = pdf_from_lines("Brouillon devis réparation — Aqualeo", lines)
     buf.name = f"Brouillon_Devis_{control['id']}.pdf"
     return buf, ("Brouillon généré ; prix fournisseur manquant pour au moins une ligne." if missing else None)
@@ -1382,17 +1405,73 @@ def send_email_with_attachments(to_email, subject, body, attachments, cc_email=N
         server.send_message(msg)
 
 
+def save_post_workflow(control_id, mode, status, client_email=None, due_at=None):
+    con = connect_db()
+    now = now_iso()
+    con.execute("""
+        INSERT INTO post_control_workflows(
+            control_id, mode, status, client_email, due_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(control_id, mode)
+        DO UPDATE SET
+            status=excluded.status,
+            client_email=COALESCE(excluded.client_email, post_control_workflows.client_email),
+            due_at=COALESCE(excluded.due_at, post_control_workflows.due_at),
+            updated_at=excluded.updated_at
+    """, (int(control_id), mode, status, client_email, due_at, now, now))
+    con.commit()
+    con.close()
+
+
+def quote_tracking_text(control_id):
+    con = connect_db()
+    rows = con.execute("""
+        SELECT mode, status, client_email, due_at, updated_at
+        FROM post_control_workflows
+        WHERE control_id=?
+        ORDER BY id
+    """, (int(control_id),)).fetchall()
+    con.close()
+    if not rows:
+        return "Aucun suivi de devis enregistré."
+    labels = {
+        "basic": "Rapport + facture",
+        "immediate": "Devis immédiat / sur place",
+        "delayed": "Devis avec délai",
+    }
+    lines = ["📌 SUIVI DOSSIER"]
+    for mode, status, email, due_at, updated_at in rows:
+        lines.append(
+            f"• {labels.get(mode, mode)} : {status}"
+            + (f" — client {email}" if email else "")
+            + (f" — relance {due_at}" if due_at else "")
+        )
+    return "\n".join(lines)
+
+
+def package_keyboard(control_id, include_quote=False, mode="basic"):
+    buttons = [
+        [InlineKeyboardButton("📨 Envoyer au client + copie Aqualeo", callback_data=f"post:sendpack_{mode}:{control_id}")],
+    ]
+    if include_quote and mode == "immediate":
+        buttons.append([
+            InlineKeyboardButton("✅ Devis accepté", callback_data=f"post:quote_accept:{control_id}"),
+            InlineKeyboardButton("❌ Devis refusé", callback_data=f"post:quote_refuse:{control_id}"),
+        ])
+    if include_quote and mode == "delayed":
+        buttons.append([
+            InlineKeyboardButton("✅ Réponse reçue / accepté", callback_data=f"post:quote_accept:{control_id}"),
+            InlineKeyboardButton("❌ Refusé", callback_data=f"post:quote_refuse:{control_id}"),
+        ])
+    buttons.append([InlineKeyboardButton("📌 Voir suivi", callback_data=f"post:tracking:{control_id}")])
+    return InlineKeyboardMarkup(buttons)
+
+
 def post_control_keyboard(control_id):
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📄 Télécharger rapport", callback_data=f"post:report:{control_id}"),
-            InlineKeyboardButton("✉️ Envoyer rapport", callback_data=f"post:email_report:{control_id}"),
-        ],
-        [
-            InlineKeyboardButton("🧾 Préparer facture", callback_data=f"post:invoice:{control_id}"),
-            InlineKeyboardButton("🔧 Préparer devis", callback_data=f"post:quote:{control_id}"),
-        ],
-        [InlineKeyboardButton("📨 Envoyer rapport + facture", callback_data=f"post:email_all:{control_id}")],
+        [InlineKeyboardButton("1️⃣ Rapport + facture", callback_data=f"post:pack_basic:{control_id}")],
+        [InlineKeyboardButton("2️⃣ + devis immédiat / sur place", callback_data=f"post:pack_immediate:{control_id}")],
+        [InlineKeyboardButton("3️⃣ + devis à valider plus tard", callback_data=f"post:pack_delayed:{control_id}")],
     ])
 
 
@@ -1436,8 +1515,9 @@ async def complete_current_device(session, chat_id, context):
         chat_id=chat_id,
         text=(
             "✅ Contrôle archivé.\n\n"
-            "Tu peux maintenant télécharger le rapport, préparer la facture, préparer un devis si une pièce est réellement diagnostiquée, "
-            "ou envoyer les documents. Aucun e-mail ne part sans appui sur un bouton d'envoi."
+            "Choisis la clôture du dossier. Le RAPPORT + la FACTURE du contrôle font partie des 3 options. "
+            "Si une réparation est nécessaire, tu peux ajouter un devis à faire accepter sur place ou à suivre plus tard. "
+            "Aucun e-mail ne part sans appui volontaire sur le bouton d'envoi."
         ),
         reply_markup=post_control_keyboard(control_id),
     )
@@ -1488,7 +1568,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.9 — contrôle + dossier intervention\n\n"
+        "👋 Discobot Aqualeo V0.10 — clôture + suivi devis\n\n"
         "1er passage : contrôle + diagnostic.\n"
         "2e passage : intervention uniquement si nécessaire.\n\n"
         "Prix : aucune estimation fournisseur inventée. "
@@ -1879,63 +1959,129 @@ async def callback_post_control(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     data = control["data"]
-    client_email = str(data.get("site", {}).get("contact_email") or "").strip()
+    site = data.get("site", {})
+    client_email = str(site.get("contact_email") or "").strip()
 
-    if action == "report":
-        buf = report_pdf(control)
-        await context.bot.send_document(chat_id=query.message.chat.id, document=buf, filename=buf.name)
+    async def send_pack_to_telegram(include_quote=False, mode="basic"):
+        report = report_pdf(control)
+        invoice, inv_err = invoice_pdf(control)
+        if inv_err:
+            await query.message.reply_text(
+                "🧾 Le rapport est prêt, mais la facture obligatoire ne peut pas être générée : " + inv_err
+            )
+            await context.bot.send_document(chat_id=query.message.chat.id, document=report, filename=report.name)
+            return False
+
+        await context.bot.send_document(chat_id=query.message.chat.id, document=report, filename=report.name)
+        await context.bot.send_document(chat_id=query.message.chat.id, document=invoice, filename=invoice.name)
+
+        if include_quote:
+            quote, note = build_quote_draft(control)
+            if not quote:
+                await query.message.reply_text("🔧 " + note)
+                return False
+            await context.bot.send_document(chat_id=query.message.chat.id, document=quote, filename=quote.name)
+            if note:
+                await query.message.reply_text("⚠️ " + note)
+
+        await query.message.reply_text(
+            "✅ Documents préparés. Rien n'a encore été envoyé par e-mail.",
+            reply_markup=package_keyboard(control_id, include_quote=include_quote, mode=mode),
+        )
+        return True
+
+    if action == "pack_basic":
+        save_post_workflow(control_id, "basic", "RAPPORT_FACTURE_PREPARES", client_email or None)
+        await send_pack_to_telegram(include_quote=False, mode="basic")
         return
 
-    if action == "invoice":
-        buf, err = invoice_pdf(control)
-        if err:
-            await query.message.reply_text("🧾 " + err)
-            return
-        await context.bot.send_document(chat_id=query.message.chat.id, document=buf, filename=buf.name)
+    if action == "pack_immediate":
+        save_post_workflow(control_id, "immediate", "DEVIS_A_FAIRE_ACCEPTER_SUR_PLACE", client_email or None)
+        await send_pack_to_telegram(include_quote=True, mode="immediate")
         return
 
-    if action == "quote":
-        buf, note = build_quote_draft(control)
-        if not buf:
-            await query.message.reply_text("🔧 " + note)
-            return
-        await context.bot.send_document(chat_id=query.message.chat.id, document=buf, filename=buf.name)
-        if note:
-            await query.message.reply_text("⚠️ " + note)
+    if action == "pack_delayed":
+        due = (datetime.now(timezone.utc) + timedelta(days=QUOTE_FOLLOWUP_DAYS)).isoformat(timespec="seconds")
+        save_post_workflow(
+            control_id, "delayed", "DEVIS_EN_ATTENTE_DE_REPONSE",
+            client_email or None, due
+        )
+        ok = await send_pack_to_telegram(include_quote=True, mode="delayed")
+        if ok:
+            await query.message.reply_text(
+                f"⏳ Dossier marqué en attente. Relance cible enregistrée à J+{QUOTE_FOLLOWUP_DAYS}."
+            )
         return
 
-    if action in {"email_report", "email_all"}:
+    if action == "tracking":
+        await query.message.reply_text(quote_tracking_text(control_id))
+        return
+
+    if action in {"quote_accept", "quote_refuse"}:
+        status = "DEVIS_ACCEPTE" if action == "quote_accept" else "DEVIS_REFUSE"
+        # Met à jour les deux modes possibles sans en créer un nouveau inutilement.
+        con = connect_db()
+        con.execute(
+            "UPDATE post_control_workflows SET status=?, updated_at=? WHERE control_id=? AND mode IN ('immediate','delayed')",
+            (status, now_iso(), int(control_id))
+        )
+        con.commit()
+        con.close()
+        await query.message.reply_text(
+            "✅ Statut enregistré : " + ("devis accepté." if action == "quote_accept" else "devis refusé.")
+            + "\n" + quote_tracking_text(control_id)
+        )
+        return
+
+    if action.startswith("sendpack_"):
+        mode = action.replace("sendpack_", "")
         if not client_email:
             await query.message.reply_text(
-                "✉️ Aucun e-mail client n'est enregistré dans ce dossier. "
-                "Je n'envoie rien tant que l'adresse n'est pas connue."
+                "✉️ Aucun e-mail client n'est enregistré. Aucun envoi effectué."
             )
             return
         if not smtp_ready():
             await query.message.reply_text(
-                "✉️ L'envoi est prêt côté workflow, mais la messagerie du bot n'est pas encore configurée. "
-                "Aucun message n'a été envoyé."
+                f"✉️ L'adresse copie Aqualeo est bien {COMPANY_EMAIL}, mais le compte d'envoi SMTP du bot n'est pas encore configuré. "
+                "Aucun e-mail n'a été envoyé."
             )
             return
 
-        attachments = [report_pdf(control)]
-        if action == "email_all":
-            inv, err = invoice_pdf(control)
-            if err:
-                await query.message.reply_text("🧾 Envoi bloqué : " + err)
+        report = report_pdf(control)
+        invoice, inv_err = invoice_pdf(control)
+        if inv_err:
+            await query.message.reply_text("🧾 Envoi bloqué : " + inv_err)
+            return
+        attachments = [report, invoice]
+
+        if mode in {"immediate", "delayed"}:
+            quote, note = build_quote_draft(control)
+            if not quote:
+                await query.message.reply_text("🔧 Envoi bloqué : " + note)
                 return
-            attachments.append(inv)
+            attachments.append(quote)
 
         try:
             send_email_with_attachments(
                 client_email,
-                f"{COMPANY_NAME} — contrôle disconnecteur(s) — {data.get('site',{}).get('site','site')}",
-                "Bonjour,\n\nVeuillez trouver ci-joint les documents relatifs au contrôle réalisé.\n\nBien cordialement,\n" + COMPANY_NAME,
+                f"{COMPANY_NAME} — contrôle disconnecteur(s) — {site.get('site','site')}",
+                (
+                    "Bonjour,\n\n"
+                    "Veuillez trouver ci-joint le rapport de contrôle et la facture correspondante."
+                    + (" Le devis de réparation est également joint pour validation." if mode in {"immediate","delayed"} else "")
+                    + f"\n\nUne copie est adressée à {COMPANY_EMAIL}.\n\nBien cordialement,\n{COMPANY_NAME}"
+                ),
                 attachments,
                 cc_email=COMPANY_EMAIL,
             )
+            workflow_mode = mode if mode in {"basic","immediate","delayed"} else "basic"
+            status = "ENVOYE_CLIENT_ET_AQUALEO"
+            if workflow_mode in {"immediate","delayed"}:
+                status = "DEVIS_ENVOYE_EN_ATTENTE_REPONSE"
+            save_post_workflow(control_id, workflow_mode, status, client_email)
             await query.message.reply_text(
-                f"✅ E-mail envoyé à {client_email} avec copie à {COMPANY_EMAIL}."
+                f"✅ Documents envoyés à {client_email}, avec copie à {COMPANY_EMAIL}.\n"
+                + quote_tracking_text(control_id)
             )
         except Exception as exc:
             print(f"[Discobot] Envoi e-mail impossible: {exc}")
