@@ -52,7 +52,17 @@ VAT_RATE = float(os.environ.get("VAT_RATE", "20") or "20")
 COMPANY_NAME = os.environ.get("COMPANY_NAME", "Plomberie Aqualeo").strip()
 COMPANY_PHONE = os.environ.get("COMPANY_PHONE", "06 13 14 20 90").strip()
 COMPANY_SIREN = os.environ.get("COMPANY_SIREN", "").strip()
+COMPANY_SIRET = os.environ.get("COMPANY_SIRET", "").strip()
+COMPANY_ADDRESS = os.environ.get("COMPANY_ADDRESS", "").strip()
 QUOTE_FOLLOWUP_DAYS = int(os.environ.get("QUOTE_FOLLOWUP_DAYS", "10") or "10")
+AUTO_TELEGRAM_BACKUP = os.environ.get("AUTO_TELEGRAM_BACKUP", "1").strip().lower() not in {"0","false","no","off"}
+
+TEST_KIT_BRAND = os.environ.get("TEST_KIT_BRAND", "").strip()
+TEST_KIT_MODEL = os.environ.get("TEST_KIT_MODEL", "").strip()
+TEST_KIT_SERIAL = os.environ.get("TEST_KIT_SERIAL", "").strip()
+TEST_KIT_CERT_NUMBER = os.environ.get("TEST_KIT_CERT_NUMBER", "").strip()
+TEST_KIT_CERT_DATE = os.environ.get("TEST_KIT_CERT_DATE", "").strip()
+TEST_KIT_NEXT_CHECK = os.environ.get("TEST_KIT_NEXT_CHECK", "").strip()
 
 # Grille commerciale Aqualeo V1 — contrôle/entretien périodique par appareil.
 # Pas de remise automatique pour un 2e appareil sur le même site.
@@ -763,7 +773,36 @@ def _short_date(value):
 
 
 def allowed_user(user_id):
-    return not ALLOWED_USER_IDS or user_id in ALLOWED_USER_IDS
+    return bool(ALLOWED_USER_IDS) and user_id in ALLOWED_USER_IDS
+
+
+def owner_lock_text(user_id):
+    if ALLOWED_USER_IDS:
+        return "🔒 Discobot est verrouillé par identifiant Telegram."
+    return (
+        "🔒 Discobot est en MODE VERROUILLÉ : aucun opérateur n'est autorisé tant que "
+        "ALLOWED_TELEGRAM_USER_IDS n'est pas configuré.\n\n"
+        f"Ton identifiant Telegram est : {user_id}\n"
+        "Envoie ce numéro dans notre conversation ChatGPT pour que je l'inscrive dans Railway."
+    )
+
+
+def test_kit_lines():
+    return [
+        f"Marque : {TEST_KIT_BRAND or 'À RENSEIGNER'}",
+        f"Modèle : {TEST_KIT_MODEL or 'À RENSEIGNER'}",
+        f"N° série : {TEST_KIT_SERIAL or 'À RENSEIGNER'}",
+        f"N° certificat / étalonnage : {TEST_KIT_CERT_NUMBER or 'À RENSEIGNER'}",
+        f"Date certificat : {TEST_KIT_CERT_DATE or 'À RENSEIGNER'}",
+        f"Prochaine vérification : {TEST_KIT_NEXT_CHECK or 'À RENSEIGNER'}",
+    ]
+
+
+def test_kit_ready():
+    return all([
+        TEST_KIT_BRAND, TEST_KIT_MODEL, TEST_KIT_SERIAL,
+        TEST_KIT_CERT_NUMBER, TEST_KIT_CERT_DATE
+    ])
 
 
 def status_keyboard():
@@ -1755,6 +1794,9 @@ def build_summary(data):
         ])
 
     lines.extend([
+        "APPAREILLAGE DE CONTRÔLE",
+        *test_kit_lines(),
+        "",
         "CONCLUSION / TRAÇABILITÉ",
         "Le présent contrôle porte sur le fonctionnement des organes accessibles et sur les mesures réellement relevées au jour de l'intervention.",
         SERVICE_LIMIT,
@@ -2111,8 +2153,11 @@ def maintenance_quote_pdf(control):
     site = data.get("site", {})
     lines = [
         COMPANY_NAME,
+        f"Adresse : {COMPANY_ADDRESS or 'à renseigner'}",
         f"Téléphone : {COMPANY_PHONE}",
+        f"E-mail : {COMPANY_EMAIL}",
         f"SIREN : {COMPANY_SIREN or 'à renseigner'}",
+        f"SIRET : {COMPANY_SIRET or 'à renseigner'}",
         "",
         f"DEVIS — entretien / maintenance et contrôle périodique — dossier n° {control['id']}",
         f"Client : {site.get('client','—')}",
@@ -2171,8 +2216,11 @@ def invoice_pdf(control):
     ]
     lines = [
         COMPANY_NAME,
+        f"Adresse : {COMPANY_ADDRESS or 'à renseigner'}",
         f"Téléphone : {COMPANY_PHONE}",
+        f"E-mail : {COMPANY_EMAIL}",
         f"SIREN : {COMPANY_SIREN or 'à renseigner'}",
+        f"SIRET : {COMPANY_SIRET or 'à renseigner'}",
         "",
         f"FACTURE PROVISOIRE — Intervention n° {control['id']}",
         f"Client : {site.get('client','—')}",
@@ -2426,6 +2474,7 @@ async def complete_current_device(session, chat_id, context):
             ),
             reply_markup=reperage_keyboard(control_id),
         )
+        await send_db_backup(chat_id, context, reason=f"repérage dossier {control_id}")
         if data.get("auto_send_quote"):
             if client_email and smtp_ready():
                 try:
@@ -2465,6 +2514,7 @@ async def complete_current_device(session, chat_id, context):
         ),
         reply_markup=post_control_keyboard(control_id),
     )
+    await send_db_backup(chat_id, context, reason=f"contrôle dossier {control_id}")
     return True
 
 
@@ -2609,6 +2659,63 @@ async def callback_procedure_ba(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(text_value, reply_markup=keyboard)
     except Exception:
         await query.message.reply_text(text_value, reply_markup=keyboard)
+
+
+async def send_db_backup(chat_id, context, reason="sauvegarde"):
+    if not AUTO_TELEGRAM_BACKUP:
+        return
+    if not os.path.exists(DB_PATH):
+        return
+    try:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        with open(DB_PATH, "rb") as fh:
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=fh,
+                filename=f"Discobot_backup_{stamp}.db",
+                caption=f"🛡 Sauvegarde Discobot — {reason}",
+            )
+    except Exception as exc:
+        print(f"[Discobot] Sauvegarde Telegram impossible: {exc}")
+
+
+async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    await update.effective_message.reply_text(
+        f"🆔 Ton identifiant Telegram : {user_id}\n\n" + owner_lock_text(user_id)
+    )
+
+
+async def securite(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not allowed_user(user_id):
+        await update.effective_message.reply_text(owner_lock_text(user_id))
+        return
+    await update.effective_message.reply_text(
+        "🔒 SÉCURITÉ\n\n"
+        "Accès opérationnel : autorisé uniquement aux identifiants Telegram enregistrés.\n"
+        f"Nombre d'identifiants autorisés : {len(ALLOWED_USER_IDS)}\n"
+        "Les autres utilisateurs peuvent trouver le bot s'ils connaissent son @, mais ils ne peuvent pas utiliser ses fonctions."
+    )
+
+
+async def materiel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed_user(update.effective_user.id):
+        await update.effective_message.reply_text(owner_lock_text(update.effective_user.id))
+        return
+    await update.effective_message.reply_text(
+        "🧰 MALLETTE / APPAREILLAGE DE CONTRÔLE\n\n"
+        + "\n".join(test_kit_lines())
+        + ("\n\n✅ Appareillage suffisamment renseigné pour le rapport." if test_kit_ready()
+           else "\n\n🟡 C'est volontairement le bloc à compléter quand la mallette sera choisie/reçue.")
+    )
+
+
+async def sauvegarde(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed_user(update.effective_user.id):
+        await update.effective_message.reply_text(owner_lock_text(update.effective_user.id))
+        return
+    await send_db_backup(update.effective_chat.id, context, reason="sauvegarde manuelle")
 
 
 async def cockpit(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2834,12 +2941,12 @@ async def callback_cockpit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not allowed_user(user_id):
-        await update.effective_message.reply_text("Accès non autorisé.")
+        await update.effective_message.reply_text(owner_lock_text(user_id))
         return
 
     snap = cockpit_snapshot()
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.18 — parc → contrôle préchargé\n\n"
+        "👋 Discobot Aqualeo V0.19 — accès privé + sauvegarde + mallette\n\n"
         f"🏢 {snap['sites']} site(s) — 🔩 {snap['assets']} appareil(s) — "
         f"🔴 {snap['anomalies']} anomalie(s) — ⏰ {snap['due_soon']} échéance(s) ≤45 j\n\n"
         "Le dossier se construit pendant l'intervention : photos, identité appareil, "
@@ -3477,6 +3584,10 @@ async def callback_post_control(update: Update, context: ContextTypes.DEFAULT_TY
 async def post_init(application):
     await application.bot.set_my_commands([
         BotCommand("start", "Accueil / cockpit"),
+        BotCommand("myid", "Afficher mon ID Telegram"),
+        BotCommand("securite", "État du verrouillage"),
+        BotCommand("materiel", "Mallette / certificat"),
+        BotCommand("sauvegarde", "Sauvegarder la base"),
         BotCommand("cockpit", "Cockpit terrain"),
         BotCommand("reperage", "Repérage puis devis"),
         BotCommand("nouveau", "Nouveau contrôle"),
@@ -3504,6 +3615,10 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("myid", myid))
+    app.add_handler(CommandHandler("securite", securite))
+    app.add_handler(CommandHandler("materiel", materiel))
+    app.add_handler(CommandHandler("sauvegarde", sauvegarde))
     app.add_handler(CommandHandler("cockpit", cockpit))
     app.add_handler(CommandHandler("parc", parc))
     app.add_handler(CommandHandler("suivi", suivi))
