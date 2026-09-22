@@ -98,6 +98,127 @@ ALLOWED_USER_IDS = {
     int(x.strip()) for x in allowed.split(",") if x.strip().isdigit()
 } if allowed else set()
 
+ASTEE_BA_SOURCE = "ASTEE/CSTB — Fiche de maintenance BA, décembre 2025"
+
+# Procédure de référence BA. Elle reprend la logique de la fiche ASTEE/CSTB
+# en la reformulant pour un guidage terrain. Les numéros 3 à 10 correspondent
+# au schéma de l'appareillage de contrôle de cette fiche, pas nécessairement
+# aux repères physiques d'une autre mallette.
+ASTEE_BA_STEPS = [
+    {
+        "n": 1,
+        "title": "Mise en configuration et lecture initiale",
+        "action": "Appareillage initialisé et branché. Mettre les robinets 10, 9, 8, 7, 6, 5, 4, 3 ouverts, puis ouvrir V1. Refermer 9, 10 et 6, puis fermer V1.",
+        "check": "Relever M1, MD et M2. Si la décharge D ne fuit pas, poursuivre. Une fuite permanente à D impose d'abord de contrôler V1 et V2."
+    },
+    {
+        "n": 2,
+        "title": "Contrôle rapide V1",
+        "action": "Ouvrir le robinet 6.",
+        "check": "Pas d'écoulement continu : poursuivre. Écoulement continu : V1 ne tient pas l'isolement et doit être remise en état."
+    },
+    {
+        "n": 3,
+        "title": "Étanchéité V1",
+        "action": "Refermer 6 puis attendre 3 minutes avant la lecture.",
+        "check": "M1 doit rester à 0. Si M1 remonte au-dessus de 0, V1 est non étanche."
+    },
+    {
+        "n": 4,
+        "title": "Contrôle rapide V2",
+        "action": "Ouvrir le robinet 9.",
+        "check": "Avec le circuit aval en charge, l'absence d'écoulement continu permet de poursuivre. Un écoulement continu oriente vers V2 non étanche."
+    },
+    {
+        "n": 5,
+        "title": "Étanchéité C1 + membrane",
+        "action": "Ouvrir V1 et 6 puis 10. Refermer 9, 10 puis 6. Fermer V1 et rouvrir 10. Attendre 3 minutes avant la lecture.",
+        "check": "MD ≥ 0,20 bar : C1 et membrane tiennent cet essai. MD < 0,20 bar : rechercher un défaut de C1 et/ou de membrane."
+    },
+    {
+        "n": 6,
+        "title": "Ouverture de la soupape de décharge",
+        "action": "Fermer 10, ouvrir V1, refermer V1 puis ouvrir 6.",
+        "check": "La mise à décharge doit se produire. Si elle ne se produit pas, la soupape peut être bloquée fermée."
+    },
+    {
+        "n": 7,
+        "title": "Étanchéité de la soupape",
+        "action": "Fermer 6. Ouvrir V1, 6 et 10. Refermer 10 puis 6.",
+        "check": "Absence de fuite permanente à D : soupape étanche à cet essai. Fuite permanente : défaut de soupape à traiter."
+    },
+    {
+        "n": 8,
+        "title": "Étanchéité V2 / circuit aval",
+        "action": "Ouvrir 9, le refermer, puis fermer V1. Attendre 3 minutes avant la lecture.",
+        "check": "M2 stable au-dessus de 0 : V2 et/ou circuit aval tiennent. Si M2 chute à 0 avec circuit aval ouvert, V2 est à remettre en état."
+    },
+    {
+        "n": 9,
+        "title": "Étanchéité C2",
+        "action": "Ouvrir 6 lentement.",
+        "check": "M2 stable au-dessus de 0 : C2 tient cet essai. Si M2 chute, C2 est non étanche."
+    },
+    {
+        "n": 10,
+        "title": "Différentiel dynamique",
+        "action": "Avec 6 ouvert, ouvrir V1, 10 et 9. Refermer 10 puis 6. Attendre 3 minutes avant de relever MD.",
+        "check": "MD > 0,140 bar : pression différentielle dynamique correcte selon cette fiche. MD ≤ 0,140 bar : insuffisante."
+    },
+    {
+        "n": 11,
+        "title": "Différentiel statique",
+        "action": "Fermer 9 puis fermer V1. Attendre 3 minutes avant de relever MD.",
+        "check": "MD > 0,140 bar : pression différentielle statique correcte selon cette fiche. MD ≤ 0,140 bar : insuffisante."
+    },
+    {
+        "n": 12,
+        "title": "Seuil de début de décharge",
+        "action": "Ouvrir 6 très lentement et relever MD au tout début de la décharge.",
+        "check": "Début de décharge à MD > 0,140 bar : résultat bon selon la fiche. À MD ≤ 0,140 bar : résultat mauvais."
+    },
+    {
+        "n": 13,
+        "title": "Fermeture de la soupape",
+        "action": "Avec 6 ouvert, ouvrir 9 et 10 puis V1. Refermer 9, 10 et 6. Relever M1, MD et M2.",
+        "check": "Pas de fuite à D : fermeture correcte. Fuite à D : reprendre les contrôles 5, 6 et 7 et noter le défaut."
+    },
+    {
+        "n": 14,
+        "title": "Dépose et remise en service",
+        "action": "Fermer 5, 4, 3 et V1. Ouvrir 9, 10 et 6. Déposer l'appareillage de contrôle puis remettre V1 et V2 dans leur position d'origine.",
+        "check": "Vérifier l'absence de fuite et la remise en service. Si les mêmes anomalies de pression persistent après reprise des essais 5 à 7, envisager le remplacement du disconnecteur. Ne jamais créer un bipasse sans protection équivalente."
+    },
+]
+
+
+def procedure_ba_keyboard(step_no):
+    rows = []
+    nav = []
+    if step_no > 1:
+        nav.append(InlineKeyboardButton("⬅️ Précédente", callback_data=f"procba:{step_no-1}"))
+    if step_no < len(ASTEE_BA_STEPS):
+        nav.append(InlineKeyboardButton("➡️ Suivante", callback_data=f"procba:{step_no+1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton("✖️ Fermer le guide", callback_data="procba:close")])
+    return InlineKeyboardMarkup(rows)
+
+
+def procedure_ba_text(step_no):
+    step_no = max(1, min(int(step_no), len(ASTEE_BA_STEPS)))
+    s = ASTEE_BA_STEPS[step_no - 1]
+    return (
+        f"📋 PROCÉDURE BA — {step_no}/14\n"
+        f"{s['title']}\n\n"
+        f"👉 MANŒUVRE\n{s['action']}\n\n"
+        f"🔎 À OBSERVER / INTERPRÉTER\n{s['check']}\n\n"
+        f"Source : {ASTEE_BA_SOURCE}\n"
+        "⚠️ Les numéros de robinets correspondent au schéma ASTEE. "
+        "Quand la mallette exacte est connue, Discobot doit charger son mapping propre au lieu de deviner."
+    )
+
+
 SITE_STEPS = [
     ("client", "Client / organisme", "text", "Qui est le client / organisme ?"),
     ("site", "Site", "text", "Nom du site / bâtiment ?"),
@@ -348,6 +469,7 @@ def status_keyboard():
 def step_keyboard(key):
     if key == "preparation_controle":
         return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 Guide ASTEE BA — 14 manœuvres", callback_data="procba:1")],
             [InlineKeyboardButton("✅ Prêt / mallette raccordée", callback_data="result:preparation_controle:ok")],
             [InlineKeyboardButton("🟡 Non vérifiable", callback_data="result:preparation_controle:nv")],
         ])
@@ -2065,6 +2187,41 @@ async def advance(session, chat_id, value, context):
         await send_step(chat_id, session, context)
 
 
+async def procedureba(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed_user(update.effective_user.id):
+        await update.effective_message.reply_text("Accès non autorisé.")
+        return
+    await update.effective_message.reply_text(
+        procedure_ba_text(1),
+        reply_markup=procedure_ba_keyboard(1),
+    )
+
+
+async def callback_procedure_ba(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not allowed_user(query.from_user.id):
+        await query.answer("Accès non autorisé", show_alert=True)
+        return
+    value = query.data.split(":", 1)[1]
+    if value == "close":
+        try:
+            await query.edit_message_text("📋 Guide BA fermé. Le dossier en cours reste inchangé.")
+        except Exception:
+            await query.message.reply_text("📋 Guide BA fermé.")
+        return
+    try:
+        step_no = int(value)
+    except Exception:
+        return
+    text_value = procedure_ba_text(step_no)
+    keyboard = procedure_ba_keyboard(step_no)
+    try:
+        await query.edit_message_text(text_value, reply_markup=keyboard)
+    except Exception:
+        await query.message.reply_text(text_value, reply_markup=keyboard)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not allowed_user(user_id):
@@ -2072,7 +2229,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.14 — repérage → devis\n\n"
+        "👋 Discobot Aqualeo V0.15 — guide ASTEE BA 14 manœuvres\n\n"
         "1er passage : maintenance préventive + contrôle périodique + diagnostic.\n"
         "Rapport : mesures, vérification fonctionnelle, conclusion et traçabilité.\n"
         "2e passage : réparation uniquement si nécessaire et validée.\n\n"
@@ -2080,6 +2237,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Chaque tarif utilisé pour un devis devra avoir une source et une date de vérification, "
         "avec alerte de mise à jour au-delà de 31 jours.\n\n"
         f"Ton identifiant Telegram : {user_id}\n\n"
+        "/procedureba — guide BA ASTEE/CSTB en 14 manœuvres\n"
         "/reperage — inventaire du parc puis devis préparé\n"
         "/reperageauto — inventaire puis devis envoyé automatiquement si possible\n"
         "/nouveau — contrôle d'un parc déjà prévu\n"
@@ -2740,11 +2898,13 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("nouveau", nouveau))
+    app.add_handler(CommandHandler("procedureba", procedureba))
     app.add_handler(CommandHandler("reperage", reperage))
     app.add_handler(CommandHandler("reperageauto", reperageauto))
     app.add_handler(CommandHandler("resume", resume))
     app.add_handler(CommandHandler("annuler", annuler))
     app.add_handler(CommandHandler("tarifs", tarifs))
+    app.add_handler(CallbackQueryHandler(callback_procedure_ba, pattern=r"^procba:"))
     app.add_handler(CallbackQueryHandler(callback_result, pattern=r"^result:"))
     app.add_handler(CallbackQueryHandler(callback_status, pattern=r"^status:"))
     app.add_handler(CallbackQueryHandler(callback_reperage, pattern=r"^rep:"))
