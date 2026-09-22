@@ -411,6 +411,25 @@ def connect_db():
             updated_at TEXT NOT NULL
         )
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS paper_archives (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            control_id INTEGER NOT NULL,
+            telegram_file_id TEXT NOT NULL,
+            file_unique_id TEXT,
+            page_no INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pending_paper_archive (
+            user_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            control_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(user_id, chat_id)
+        )
+    """)
     ensure_pricing_tables(con)
     con.commit()
     return con
@@ -770,6 +789,67 @@ def _short_date(value):
         return datetime.fromisoformat(value).strftime("%d/%m/%Y")
     except Exception:
         return str(value)[:10]
+
+
+def set_pending_paper_archive(user_id, chat_id, control_id):
+    con = connect_db()
+    con.execute("""
+        INSERT INTO pending_paper_archive(user_id, chat_id, control_id, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, chat_id) DO UPDATE SET
+            control_id=excluded.control_id,
+            created_at=excluded.created_at
+    """, (int(user_id), int(chat_id), int(control_id), now_iso()))
+    con.commit()
+    con.close()
+
+
+def get_pending_paper_archive(user_id, chat_id):
+    con = connect_db()
+    row = con.execute(
+        "SELECT control_id FROM pending_paper_archive WHERE user_id=? AND chat_id=?",
+        (int(user_id), int(chat_id))
+    ).fetchone()
+    con.close()
+    return int(row[0]) if row else None
+
+
+def clear_pending_paper_archive(user_id, chat_id):
+    con = connect_db()
+    con.execute(
+        "DELETE FROM pending_paper_archive WHERE user_id=? AND chat_id=?",
+        (int(user_id), int(chat_id))
+    )
+    con.commit()
+    con.close()
+
+
+def save_paper_archive_photo(control_id, photo):
+    con = connect_db()
+    page_no = con.execute(
+        "SELECT COUNT(*) FROM paper_archives WHERE control_id=?",
+        (int(control_id),)
+    ).fetchone()[0] + 1
+    con.execute("""
+        INSERT INTO paper_archives(
+            control_id, telegram_file_id, file_unique_id, page_no, created_at
+        ) VALUES (?, ?, ?, ?, ?)
+    """, (
+        int(control_id), photo.file_id, photo.file_unique_id, int(page_no), now_iso()
+    ))
+    con.commit()
+    con.close()
+    return page_no
+
+
+def paper_archive_count(control_id):
+    con = connect_db()
+    n = con.execute(
+        "SELECT COUNT(*) FROM paper_archives WHERE control_id=?",
+        (int(control_id),)
+    ).fetchone()[0]
+    con.close()
+    return int(n)
 
 
 def allowed_user(user_id):
@@ -2415,6 +2495,7 @@ def package_keyboard(control_id, include_quote=False, mode="basic"):
 
 def post_control_keyboard(control_id):
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📷 Archiver la fiche papier", callback_data=f"post:paperarchive:{control_id}")],
         [InlineKeyboardButton("1️⃣ Rapport + facture", callback_data=f"post:pack_basic:{control_id}")],
         [InlineKeyboardButton("2️⃣ + devis immédiat / sur place", callback_data=f"post:pack_immediate:{control_id}")],
         [InlineKeyboardButton("3️⃣ + devis à valider plus tard", callback_data=f"post:pack_delayed:{control_id}")],
@@ -2946,7 +3027,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     snap = cockpit_snapshot()
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.19 — accès privé + sauvegarde + mallette\n\n"
+        "👋 Discobot Aqualeo V0.20 — fiche papier archivable\n\n"
         f"🏢 {snap['sites']} site(s) — 🔩 {snap['assets']} appareil(s) — "
         f"🔴 {snap['anomalies']} anomalie(s) — ⏰ {snap['due_soon']} échéance(s) ≤45 j\n\n"
         "Le dossier se construit pendant l'intervention : photos, identité appareil, "
@@ -3184,6 +3265,29 @@ async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not allowed_user(user_id):
         await update.effective_message.reply_text("Accès non autorisé.")
+        return
+
+    pending_paper = get_pending_paper_archive(user_id, chat_id)
+    if pending_paper:
+        msg = update.effective_message
+        if msg.photo:
+            page_no = save_paper_archive_photo(pending_paper, msg.photo[-1])
+            await msg.reply_text(
+                f"📷 Fiche papier archivée — page/photo {page_no}.\n"
+                "Envoie la suivante, ou écris « fini » quand le dossier papier est complet."
+            )
+            return
+        raw_archive = (msg.text or "").strip().lower()
+        if raw_archive in {"fini", "fin", "terminer", "termine", "ok"}:
+            count = paper_archive_count(pending_paper)
+            clear_pending_paper_archive(user_id, chat_id)
+            await msg.reply_text(
+                f"✅ Archivage papier terminé : {count} photo(s) rattachée(s) au dossier {pending_paper}. "
+                "Elles restent la preuve terrain brute ; le rapport Discobot est la version remise au propre."
+            )
+            await send_db_backup(chat_id, context, reason=f"archive papier dossier {pending_paper}")
+            return
+        await msg.reply_text("📷 J'attends une photo de la fiche papier, ou écris « fini ».")
         return
 
     pending_billing = get_pending_billing(user_id, chat_id)
@@ -3430,6 +3534,16 @@ async def callback_post_control(update: Update, context: ContextTypes.DEFAULT_TY
     data = control["data"]
     site = data.get("site", {})
     client_email = str(site.get("contact_email") or "").strip()
+
+    if action == "paperarchive":
+        set_pending_paper_archive(query.from_user.id, query.message.chat.id, control_id)
+        await query.message.reply_text(
+            "📷 ARCHIVAGE FICHE PAPIER\n\n"
+            "Envoie les photos des pages remplies une par une, bien à plat et lisibles. "
+            "Discobot les rattache au dossier comme preuve terrain brute.\n\n"
+            "Quand tu as fini, écris simplement : fini"
+        )
+        return
 
     async def require_billing(action_name):
         if load_billing_inputs(control_id):
