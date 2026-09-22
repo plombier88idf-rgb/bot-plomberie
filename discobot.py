@@ -236,6 +236,7 @@ def blank_data():
         "current_device": {},
         "device_index": 1,
         "visit_type": "MAINTENANCE_CONTROLE_PERIODIQUE",
+        "auto_send_quote": False,
         "service_title": SERVICE_TITLE,
         "service_scope": SERVICE_SCOPE,
         "dossier_status": "PROSPECT_A_QUALIFIER",
@@ -1157,8 +1158,9 @@ def normalize_intake_defaults(data):
 def next_missing_step(session, start_index=0):
     data = session["data"]
     normalize_intake_defaults(data)
+    stop_index = reperage_end_index() if is_reperage(data) else len(ALL_STEPS)
 
-    for idx in range(max(0, start_index), len(ALL_STEPS)):
+    for idx in range(max(0, start_index), stop_index):
         key, _, _, _ = get_step(idx)
 
         if idx < len(SITE_STEPS):
@@ -1204,6 +1206,17 @@ def build_intake_preview(data):
     lines.append("Je garde tout ce qui est déjà lu : je ne te le redemanderai pas.")
     lines.append("S'il faut corriger quelque chose, écris simplement la correction en une phrase.")
     return "\n".join(lines)
+
+
+def is_reperage(data):
+    return data.get("visit_type") == "REPERAGE_DEVIS"
+
+
+def reperage_end_index():
+    # Fin juste après le diamètre : emplacement + 2 photos + identité + DN.
+    return len(SITE_STEPS) + next(
+        i + 1 for i, step in enumerate(DEVICE_STEPS) if step[0] == "diametre"
+    )
 
 
 def total_devices(data):
@@ -1650,6 +1663,58 @@ def billing_internal_summary(control_id):
         "Le prix retenu est le plus élevé entre la grille commerciale et le plancher économique."
     )
 
+def maintenance_quote_pdf(control):
+    commercial, err = commercial_control_total(control)
+    if err:
+        return None, err
+    data = control["data"]
+    site = data.get("site", {})
+    lines = [
+        COMPANY_NAME,
+        f"Téléphone : {COMPANY_PHONE}",
+        f"SIREN : {COMPANY_SIREN or 'à renseigner'}",
+        "",
+        f"DEVIS — entretien / maintenance et contrôle périodique — dossier n° {control['id']}",
+        f"Client : {site.get('client','—')}",
+        f"Site : {site.get('site','—')}",
+        f"Adresse : {site.get('adresse','—')}",
+        "",
+        "Prestation proposée : contrôle périodique des dispositifs répertoriés lors du repérage,",
+        "essais, mesures, diagnostic, entretien prévu par la procédure applicable et compte-rendu par appareil.",
+        "",
+    ]
+    for item in commercial["details"]:
+        lines.append(
+            f"Appareil {item['device']} — DN{item['dn']} : {item['price_ht']:.2f} € HT"
+        )
+    ht = commercial["base_ht"]
+    tva = round(ht * VAT_RATE / 100.0, 2)
+    ttc = round(ht + tva, 2)
+    lines.extend([
+        "",
+        f"TOTAL HT : {ht:.2f} €",
+        f"TVA {VAT_RATE:.1f}% : {tva:.2f} €",
+        f"TOTAL TTC : {ttc:.2f} €",
+        "",
+        "Chaque appareil est facturé selon son DN. Aucune remise multi-appareils n'est appliquée automatiquement.",
+        "Péages, parking, accès ou moyens particuliers non connus au repérage peuvent faire l'objet d'un complément indiqué avant intervention.",
+        "",
+        "Bon pour accord : ______________________________",
+        "Nom / fonction : ______________________________",
+        "Date : ____ / ____ / ______    Signature : __________________",
+    ])
+    buf = pdf_from_lines("Devis maintenance / contrôle disconnecteur(s) — Aqualeo", lines)
+    buf.name = f"Devis_Maintenance_Controle_{control['id']}.pdf"
+    return buf, None
+
+
+def reperage_keyboard(control_id):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📨 Envoyer le devis", callback_data=f"rep:send:{control_id}")],
+        [InlineKeyboardButton("📁 Garder sans envoyer", callback_data=f"rep:keep:{control_id}")],
+    ])
+
+
 def invoice_pdf(control):
     calc, err = calculate_control_price(control["id"])
     if err:
@@ -1901,6 +1966,52 @@ async def complete_current_device(session, chat_id, context):
     control_id = persist_control(session)
     session["current_step"] = len(ALL_STEPS)
     save_session(session, completed=True)
+
+    if is_reperage(data):
+        control = load_control(control_id)
+        quote, quote_err = maintenance_quote_pdf(control)
+        if quote_err:
+            await context.bot.send_message(chat_id=chat_id, text="⚠️ Repérage archivé, mais devis impossible : " + quote_err)
+            return True
+        await context.bot.send_document(chat_id=chat_id, document=quote, filename=quote.name)
+        site = data.get("site", {})
+        client_email = str(site.get("contact_email") or "").strip()
+        total = commercial_control_total(control)[0]["base_ht"]
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"✅ Repérage terminé et parc archivé.\n"
+                f"Devis de maintenance / contrôle préparé automatiquement : {total:.2f} € HT.\n"
+                "Chaque appareil garde son tarif selon son DN."
+            ),
+            reply_markup=reperage_keyboard(control_id),
+        )
+        if data.get("auto_send_quote"):
+            if client_email and smtp_ready():
+                try:
+                    send_email_with_attachments(
+                        client_email,
+                        f"{COMPANY_NAME} — devis maintenance disconnecteurs — {site.get('site','site')}",
+                        (
+                            "Bonjour,\n\n"
+                            "À la suite du repérage réalisé sur votre site, veuillez trouver ci-joint notre devis "
+                            "pour l'entretien / maintenance et le contrôle périodique des disconnecteurs répertoriés.\n\n"
+                            f"Bien cordialement,\n{COMPANY_NAME}"
+                        ),
+                        [quote],
+                        cc_email=COMPANY_EMAIL,
+                    )
+                    save_post_workflow(control_id, "reperage_quote", "DEVIS_ENVOYE", client_email)
+                    await context.bot.send_message(chat_id=chat_id, text=f"📨 Devis envoyé automatiquement à {client_email}, copie Aqualeo.")
+                except Exception as exc:
+                    await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Envoi automatique impossible : {exc}")
+            else:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="⚠️ Envoi automatique non effectué : e-mail client absent ou messagerie du bot non configurée."
+                )
+        return True
+
     summary = build_summary(data)
     for i in range(0, len(summary), 3900):
         await context.bot.send_message(chat_id=chat_id, text=summary[i:i + 3900])
@@ -1961,7 +2072,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.13 — contrôle annuel + compétence opérateur\n\n"
+        "👋 Discobot Aqualeo V0.14 — repérage → devis\n\n"
         "1er passage : maintenance préventive + contrôle périodique + diagnostic.\n"
         "Rapport : mesures, vérification fonctionnelle, conclusion et traçabilité.\n"
         "2e passage : réparation uniquement si nécessaire et validée.\n\n"
@@ -1969,38 +2080,59 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Chaque tarif utilisé pour un devis devra avoir une source et une date de vérification, "
         "avec alerte de mise à jour au-delà de 31 jours.\n\n"
         f"Ton identifiant Telegram : {user_id}\n\n"
-        "/nouveau — nouveau contrôle\n"
+        "/reperage — inventaire du parc puis devis préparé\n"
+        "/reperageauto — inventaire puis devis envoyé automatiquement si possible\n"
+        "/nouveau — contrôle d'un parc déjà prévu\n"
         "/resume — reprendre\n"
         "/annuler — clôturer sans validation\n"
         "/tarifs — état de la base prix"
     )
 
 
-async def nouveau(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _start_session_mode(update, context, mode="MAINTENANCE_CONTROLE_PERIODIQUE", auto_send=False):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-
     if not allowed_user(user_id):
         await update.effective_message.reply_text("Accès non autorisé.")
         return
-
     existing = get_session(user_id, chat_id)
     if existing:
         await update.effective_message.reply_text(
-            "Un contrôle est déjà en cours. Utilise /resume ou /annuler."
+            "Un dossier est déjà en cours. Utilise /resume ou /annuler."
         )
         return
-
     create_session(user_id, chat_id)
     session = get_session(user_id, chat_id)
-    await update.effective_message.reply_text(
-        "🆕 Nouveau dossier / contrôle créé.\n\n"
-        "Le plus simple : 📸 envoie directement une photo du dossier / ordre d'intervention.\n"
-        "Discobot doit lire le client, le site, l'adresse, le contact utile et les appareils présents.\n\n"
-        "Sinon, écris tout en UNE phrase.\n"
-        "Exemple : « Lycée Lucie Aubrac, 51 rue Victor Hugo 93500 Pantin, 2 disconnecteurs ».\n\n"
-        "Je range les informations et je ne redemande jamais ce qui est déjà connu."
-    )
+    session["data"]["visit_type"] = mode
+    session["data"]["auto_send_quote"] = bool(auto_send)
+    if mode == "REPERAGE_DEVIS":
+        session["data"]["dossier_status"] = "REPERAGE_EN_COURS"
+    save_session(session)
+    if mode == "REPERAGE_DEVIS":
+        await update.effective_message.reply_text(
+            "📋 REPÉRAGE / INVENTAIRE DU PARC\n\n"
+            "But : enregistrer le site et chaque disconnecteur pour préparer le devis automatiquement.\n"
+            "Pour chaque appareil : emplacement, photo générale, photo plaque, marque, modèle, type, série et DN.\n\n"
+            "Commence par une photo du dossier / ordre d'intervention ou écris le client, le site et l'adresse en une phrase."
+            + ("\n\n⚡ Mode auto : à la fin, le devis sera envoyé automatiquement si l'e-mail client et la messagerie du bot sont configurés." if auto_send else "")
+        )
+    else:
+        await update.effective_message.reply_text(
+            "🆕 Nouveau contrôle créé.\n\n"
+            "Envoie une photo du dossier / ordre d'intervention ou écris client, site, adresse et nombre d'appareils en une phrase."
+        )
+
+
+async def nouveau(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _start_session_mode(update, context, "MAINTENANCE_CONTROLE_PERIODIQUE", False)
+
+
+async def reperage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _start_session_mode(update, context, "REPERAGE_DEVIS", False)
+
+
+async def reperageauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _start_session_mode(update, context, "REPERAGE_DEVIS", True)
 
 
 async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2362,6 +2494,56 @@ async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_step(chat_id, session, context)
 
 
+async def callback_reperage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not allowed_user(query.from_user.id):
+        await query.answer("Accès non autorisé", show_alert=True)
+        return
+    parts = query.data.split(":")
+    if len(parts) != 3:
+        return
+    _, action, control_id = parts
+    control = load_control(control_id)
+    if not control:
+        await query.message.reply_text("Dossier introuvable.")
+        return
+    site = control["data"].get("site", {})
+    if action == "keep":
+        save_post_workflow(control_id, "reperage_quote", "DEVIS_PREPARE_NON_ENVOYE", str(site.get("contact_email") or "") or None)
+        await query.message.reply_text("📁 Devis conservé sans envoi.")
+        return
+    if action == "send":
+        client_email = str(site.get("contact_email") or "").strip()
+        if not client_email:
+            await query.message.reply_text("✉️ Aucun e-mail client enregistré : envoi impossible.")
+            return
+        if not smtp_ready():
+            await query.message.reply_text("✉️ Messagerie du bot non configurée : aucun e-mail envoyé.")
+            return
+        quote, err = maintenance_quote_pdf(control)
+        if err:
+            await query.message.reply_text("Devis impossible : " + err)
+            return
+        try:
+            send_email_with_attachments(
+                client_email,
+                f"{COMPANY_NAME} — devis maintenance disconnecteurs — {site.get('site','site')}",
+                (
+                    "Bonjour,\n\n"
+                    "À la suite du repérage réalisé sur votre site, veuillez trouver ci-joint notre devis "
+                    "pour l'entretien / maintenance et le contrôle périodique des disconnecteurs répertoriés.\n\n"
+                    f"Bien cordialement,\n{COMPANY_NAME}"
+                ),
+                [quote],
+                cc_email=COMPANY_EMAIL,
+            )
+            save_post_workflow(control_id, "reperage_quote", "DEVIS_ENVOYE", client_email)
+            await query.message.reply_text(f"✅ Devis envoyé à {client_email}, avec copie Aqualeo.")
+        except Exception as exc:
+            await query.message.reply_text(f"⚠️ Envoi impossible : {exc}")
+
+
 async def callback_post_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -2558,11 +2740,14 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("nouveau", nouveau))
+    app.add_handler(CommandHandler("reperage", reperage))
+    app.add_handler(CommandHandler("reperageauto", reperageauto))
     app.add_handler(CommandHandler("resume", resume))
     app.add_handler(CommandHandler("annuler", annuler))
     app.add_handler(CommandHandler("tarifs", tarifs))
     app.add_handler(CallbackQueryHandler(callback_result, pattern=r"^result:"))
     app.add_handler(CallbackQueryHandler(callback_status, pattern=r"^status:"))
+    app.add_handler(CallbackQueryHandler(callback_reperage, pattern=r"^rep:"))
     app.add_handler(CallbackQueryHandler(callback_post_control, pattern=r"^post:"))
     app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, receive))
 
