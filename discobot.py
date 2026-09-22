@@ -223,6 +223,140 @@ def status_keyboard():
     ])
 
 
+def step_keyboard(key):
+    if key in {"vanne_amont", "vanne_aval"}:
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Ferme bien", callback_data=f"result:{key}:ok"),
+                InlineKeyboardButton("💧 Laisse passer", callback_data=f"result:{key}:leak"),
+            ],
+            [InlineKeyboardButton("❔ Non vérifiable", callback_data=f"result:{key}:nv")],
+        ])
+    if key == "clapets":
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ RAS", callback_data="result:clapets:ok"),
+                InlineKeyboardButton("⚠️ Anomalie", callback_data="result:clapets:anomaly"),
+            ],
+            [InlineKeyboardButton("❔ Non vérifiable", callback_data="result:clapets:nv")],
+        ])
+    return status_keyboard()
+
+
+def device_identity(data):
+    device = data.get("current_device", {})
+    parts = [
+        str(device.get("marque", "")).strip(),
+        str(device.get("modele", "")).strip(),
+        str(device.get("type", "")).strip(),
+        str(device.get("diametre", "")).strip(),
+    ]
+    return " ".join(p for p in parts if p)
+
+
+def is_sferaco_ba574(data):
+    ident = device_identity(data).lower()
+    return ("sferaco" in ident or "scudo" in ident) and ("ba574" in ident or "950" in ident)
+
+
+def guided_prompt(session, key, base_prompt):
+    data = session["data"]
+    ident = device_identity(data)
+    prefix = f"Appareil identifié : {ident}\n\n" if ident else ""
+
+    guides = {
+        "emplacement": (
+            "📍 Regarde où se trouve physiquement l'appareil. "
+            "Réponds simplement par exemple : « chaufferie », « regard extérieur », « local incendie ». "
+            "Pas besoin d'une phrase complète."
+        ),
+        "photo_loin": (
+            "📸 Recule assez pour prendre l'ensemble : disconnecteur + vannes amont/aval + filtre + évacuation. "
+            "La photo doit permettre de comprendre le sens de circulation."
+        ),
+        "photo_pres": (
+            "📸 Prends maintenant une photo rapprochée de la plaque et des prises de contrôle. "
+            "Essaie d'avoir marque, modèle, DN, n° de série et flèche de sens dans la photo."
+        ),
+        "marque": "🔎 Si la marque n'est pas lisible, envoie une photo plus proche au lieu de deviner.",
+        "modele": "🔎 Lis la référence sur la plaque. Si elle est illisible, réponds « illisible ».",
+        "type": "🔎 Vérifie le marquage du type (par ex. BA). Ne le déduis pas uniquement à la forme de l'appareil.",
+        "serie": "🔎 Recopie uniquement le numéro réellement lisible. Sinon réponds « illisible ».",
+        "diametre": "🔎 Lis le DN sur le corps ou la plaque. Exemple : DN20, DN50, DN80.",
+        "vanne_amont": (
+            "🧰 OBJECTIF : vérifier que la vanne AMONT isole réellement, pas seulement qu'elle tourne.\n"
+            "1. Repère le sens de l'eau avec la flèche du disconnecteur. La vanne avant la flèche est l'amont.\n"
+            "2. Avant toute coupure, vérifie que l'arrêt d'eau est autorisé sur le site.\n"
+            "3. Si tu utilises la mallette, raccorde-la uniquement sur les prises de contrôle prévues et purge les flexibles selon sa notice. "
+            "Ne desserre jamais un raccord sous pression.\n"
+            "4. Ferme la vanne AMONT lentement. Crée ensuite la différence de pression prévue par la procédure constructeur via la prise de contrôle, "
+            "puis observe si le côté isolé continue à être réalimenté.\n"
+            "5. Si la pression remonte / l'eau continue à passer alors que la vanne est fermée : sélectionne « Laisse passer ». "
+            "Si elle isole correctement : « Ferme bien ». Si tu n'es pas certain : « Non vérifiable »."
+        ),
+        "vanne_aval": (
+            "🧰 OBJECTIF : vérifier que la vanne AVAL isole réellement.\n"
+            "1. Repère la vanne située après le disconnecteur dans le sens de la flèche.\n"
+            "2. Branche d'abord l'appareil de contrôle sur les prises prévues si le contrôle l'exige ; ne démonte rien sous pression.\n"
+            "3. Ferme la vanne AVAL lentement. Observe les pressions et l'écoulement à la décharge pendant la séquence de contrôle.\n"
+            "4. Si, après création d'une différence de pression, le côté isolé est réalimenté ou la pression remonte anormalement : "
+            "la vanne laisse passer. Sinon elle ferme correctement.\n"
+            "👉 Tu n'as plus à écrire une explication : choisis simplement le bouton correspondant."
+        ),
+        "clapets": (
+            "🔧 Ne démonte pas tout de suite. On contrôle d'abord le comportement. "
+            "Observe la décharge et les pressions pendant les manœuvres des vannes. "
+            "Une fuite continue ou un comportement anormal doit être noté comme anomalie ; Discobot proposera ensuite la zone probable à inspecter."
+        ),
+        "pression_amont": (
+            "📏 Branche le manomètre AMONT sur la prise amont identifiée par le constructeur. "
+            "Purge le flexible, stabilise la lecture puis écris la valeur réelle avec l'unité, par exemple « 4,2 bar »."
+        ),
+        "pression_zone": (
+            "📏 Relève la pression de la ZONE INTERMÉDIAIRE sur la prise correspondante. "
+            "Purge le flexible et attends une lecture stable. Écris uniquement la mesure réelle."
+        ),
+        "pression_aval": (
+            "📏 Relève la pression AVAL sur la prise aval. "
+            "Écris la valeur réelle avec l'unité. Si aucune prise n'est identifiable, choisis « Non vérifiable » plutôt que d'inventer."
+        ),
+        "differentiel": (
+            "📐 Utilise le manomètre différentiel prévu pour comparer l'amont et la zone intermédiaire. "
+            "Saisis la valeur réellement lue. Discobot ne déclarera pas l'appareil conforme uniquement à partir d'une valeur isolée."
+        ),
+        "essais": (
+            "🧪 Fais les essais d'ouverture/fermeture de la décharge et d'étanchéité selon la procédure du modèle. "
+            "Décris seulement ce qui se passe réellement : « décharge s'ouvre », « fuite continue », « pas de fuite », etc."
+        ),
+        "diagnostic": (
+            "🧠 Discobot doit maintenant raisonner à partir de ce que tu as mesuré. "
+            "Écris l'anomalie constatée si elle n'est pas déjà évidente. Ne démonte pas un organe uniquement sur une supposition."
+        ),
+        "recommandation": (
+            "🔧 Choisis la suite la plus simple correspondant au diagnostic : aucune action, surveillance, nettoyage, réparation ciblée, kit interne ou remplacement. "
+            "Si le diagnostic n'est pas certain, marque-le comme à confirmer."
+        ),
+        "intervenant": "✍️ Indique simplement le prénom/nom de l'intervenant qui a réellement fait le contrôle.",
+    }
+
+    guide = guides.get(key, base_prompt)
+
+    if key == "differentiel" and is_sferaco_ba574(data):
+        guide += (
+            "\n\n📚 Pour le SFERACO/SCUDO BA574 série 950, la notice indique qu'en fonctionnement normal "
+            "la pression de la zone intermédiaire est inférieure à la pression amont d'au moins 140 mbar. "
+            "Discobot utilisera ce seuil seulement pour ce modèle identifié."
+        )
+
+    if key in {"vanne_amont", "vanne_aval", "clapets", "pression_amont", "pression_zone", "pression_aval", "differentiel", "essais"}:
+        guide += (
+            "\n\n⚠️ Manipulation hydraulique : procédure destinée à un adulte/technicien autorisé. "
+            "Le texte doit être simple à comprendre, mais on ne fait pas manipuler un réseau sous pression à un enfant."
+        )
+
+    return prefix + guide
+
+
 def get_step(step_index):
     return ALL_STEPS[step_index]
 
@@ -569,8 +703,8 @@ async def send_step(chat_id, session, context):
 
     await context.bot.send_message(
         chat_id=chat_id,
-        text=f"{heading}\n\n{prompt}",
-        reply_markup=status_keyboard(),
+        text=f"{heading}\n\n{guided_prompt(session, key, prompt)}",
+        reply_markup=step_keyboard(key),
     )
 
 
@@ -676,7 +810,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.3 — mode intelligent\n\n"
+        "👋 Discobot Aqualeo V0.4 — guide terrain intelligent\n\n"
         "1er passage : contrôle + diagnostic.\n"
         "2e passage : intervention uniquement si nécessaire.\n\n"
         "Prix : aucune estimation fournisseur inventée. "
@@ -766,6 +900,42 @@ async def tarifs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Tarifs à actualiser : {stale}\n\n"
         "Les tarifs périmés ne seront pas utilisés automatiquement pour établir un devis."
     )
+
+
+async def callback_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    chat_id = query.message.chat.id
+    if not allowed_user(user_id):
+        await query.answer("Accès non autorisé", show_alert=True)
+        return
+
+    parts = query.data.split(":")
+    if len(parts) != 3:
+        return
+    _, key, result = parts
+
+    session = get_session(user_id, chat_id)
+    if not session:
+        await query.answer("Aucun contrôle en cours", show_alert=True)
+        return
+
+    idx = session["current_step"]
+    current_key, _, _, _ = get_step(idx)
+    if current_key != key:
+        await query.answer("Cette étape n'est plus active.", show_alert=True)
+        return
+
+    labels = {
+        "ok": "fermeture correcte / étanche au contrôle",
+        "leak": "laisse passer / fermeture non étanche",
+        "nv": {"status": "non_verifiable"},
+        "anomaly": "anomalie constatée",
+    }
+    value = labels.get(result, result)
+    await advance(session, chat_id, value, context)
 
 
 async def callback_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -949,6 +1119,7 @@ def main():
     app.add_handler(CommandHandler("resume", resume))
     app.add_handler(CommandHandler("annuler", annuler))
     app.add_handler(CommandHandler("tarifs", tarifs))
+    app.add_handler(CallbackQueryHandler(callback_result, pattern=r"^result:"))
     app.add_handler(CallbackQueryHandler(callback_status, pattern=r"^status:"))
     app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, receive))
 
