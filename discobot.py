@@ -352,6 +352,55 @@ def connect_db():
             PRIMARY KEY(user_id, chat_id)
         )
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS site_registry (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            site_key TEXT NOT NULL UNIQUE,
+            client TEXT,
+            site TEXT,
+            address TEXT,
+            contact_name TEXT,
+            contact_function TEXT,
+            contact_email TEXT,
+            contact_tel TEXT,
+            status TEXT NOT NULL DEFAULT 'A_QUALIFIER',
+            next_due_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS asset_registry (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            site_id INTEGER NOT NULL,
+            asset_key TEXT NOT NULL,
+            location TEXT,
+            brand TEXT,
+            model TEXT,
+            device_type TEXT,
+            serial TEXT,
+            dn TEXT,
+            status TEXT NOT NULL DEFAULT 'REPERTORIE',
+            last_control_at TEXT,
+            next_due_at TEXT,
+            latest_data TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(site_id, asset_key)
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS work_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            control_id INTEGER NOT NULL UNIQUE,
+            site_id INTEGER,
+            work_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            due_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
     ensure_pricing_tables(con)
     con.commit()
     return con
@@ -444,6 +493,10 @@ def persist_control(session):
     control_id = cur.lastrowid
     con.commit()
     con.close()
+    try:
+        sync_registry_from_control(control_id)
+    except Exception as exc:
+        print(f"[Discobot] Synchronisation parc impossible pour contrôle {control_id}: {exc}")
     return control_id
 
 
@@ -457,6 +510,215 @@ def load_control(control_id):
     if not row:
         return None
     return {"id": row[0], "data": json.loads(row[1]), "created_at": row[2]}
+
+
+def _registry_clean(value):
+    if value is None or isinstance(value, dict):
+        return ""
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def _registry_key(*parts):
+    raw = "|".join(_registry_clean(x).lower() for x in parts if _registry_clean(x))
+    raw = re.sub(r"[^a-z0-9à-ÿ|._/@+-]+", "-", raw)
+    return raw.strip("-|") or "inconnu"
+
+
+def _device_asset_key(device, number):
+    serial = _registry_clean(device.get("serie"))
+    if serial and serial.lower() not in {"illisible", "inconnu", "non lisible"}:
+        return "serie:" + _registry_key(serial)
+    return "loc:" + _registry_key(
+        device.get("emplacement"),
+        device.get("marque"),
+        device.get("modele"),
+        device.get("diametre"),
+        number,
+    )
+
+
+def _device_has_anomaly(device):
+    diag = _registry_clean(device.get("diagnostic")).lower()
+    rec = _registry_clean(device.get("recommandation")).lower()
+    proc = device.get("procedure_ba_results") or {}
+    if any((v or {}).get("status") == "defaut" for v in proc.values() if isinstance(v, dict)):
+        return True
+    return any(x in (diag + " " + rec) for x in [
+        "défaut", "defaut", "anomal", "non étanche", "non etanche",
+        "remplacement", "réparation", "reparation"
+    ])
+
+
+def sync_registry_from_control(control_id):
+    control = load_control(control_id)
+    if not control:
+        return None
+    data = control["data"]
+    site = data.get("site", {})
+    visit_type = data.get("visit_type", "MAINTENANCE_CONTROLE_PERIODIQUE")
+    created_at = control.get("created_at") or now_iso()
+    site_key = _registry_key(site.get("client"), site.get("site"), site.get("adresse"))
+    is_rep = visit_type == "REPERAGE_DEVIS"
+    next_due = None if is_rep else (datetime.now(timezone.utc) + timedelta(days=365)).isoformat(timespec="seconds")
+    site_status = "DEVIS_A_PREPARER" if is_rep else "CONTROLE_TERMINE"
+    work_status = "REPERAGE_TERMINE" if is_rep else "CONTROLE_TERMINE"
+
+    con = connect_db()
+    now = now_iso()
+    con.execute("""
+        INSERT INTO site_registry(
+            site_key, client, site, address, contact_name, contact_function,
+            contact_email, contact_tel, status, next_due_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(site_key) DO UPDATE SET
+            client=excluded.client,
+            site=excluded.site,
+            address=excluded.address,
+            contact_name=excluded.contact_name,
+            contact_function=excluded.contact_function,
+            contact_email=excluded.contact_email,
+            contact_tel=excluded.contact_tel,
+            status=excluded.status,
+            next_due_at=COALESCE(excluded.next_due_at, site_registry.next_due_at),
+            updated_at=excluded.updated_at
+    """, (
+        site_key,
+        _registry_clean(site.get("client")),
+        _registry_clean(site.get("site")),
+        _registry_clean(site.get("adresse")),
+        _registry_clean(site.get("contact_nom")),
+        _registry_clean(site.get("contact_fonction")),
+        _registry_clean(site.get("contact_email")),
+        _registry_clean(site.get("contact_tel")),
+        site_status,
+        next_due,
+        now,
+        now,
+    ))
+    row = con.execute("SELECT id FROM site_registry WHERE site_key=?", (site_key,)).fetchone()
+    site_id = row[0] if row else None
+
+    for n, device in enumerate(data.get("devices") or [], start=1):
+        asset_key = _device_asset_key(device, n)
+        asset_status = "REPERTORIE" if is_rep else ("ANOMALIE_A_TRAITER" if _device_has_anomaly(device) else "CONTROLE_OK")
+        con.execute("""
+            INSERT INTO asset_registry(
+                site_id, asset_key, location, brand, model, device_type, serial, dn,
+                status, last_control_at, next_due_at, latest_data, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(site_id, asset_key) DO UPDATE SET
+                location=excluded.location,
+                brand=excluded.brand,
+                model=excluded.model,
+                device_type=excluded.device_type,
+                serial=excluded.serial,
+                dn=excluded.dn,
+                status=excluded.status,
+                last_control_at=COALESCE(excluded.last_control_at, asset_registry.last_control_at),
+                next_due_at=COALESCE(excluded.next_due_at, asset_registry.next_due_at),
+                latest_data=excluded.latest_data,
+                updated_at=excluded.updated_at
+        """, (
+            site_id,
+            asset_key,
+            _registry_clean(device.get("emplacement")),
+            _registry_clean(device.get("marque")),
+            _registry_clean(device.get("modele")),
+            _registry_clean(device.get("type")),
+            _registry_clean(device.get("serie")),
+            _registry_clean(device.get("diametre")),
+            asset_status,
+            None if is_rep else created_at,
+            next_due,
+            json.dumps(device, ensure_ascii=False),
+            now,
+            now,
+        ))
+
+    con.execute("""
+        INSERT INTO work_orders(
+            control_id, site_id, work_type, status, due_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(control_id) DO UPDATE SET
+            site_id=excluded.site_id,
+            work_type=excluded.work_type,
+            status=excluded.status,
+            due_at=COALESCE(excluded.due_at, work_orders.due_at),
+            updated_at=excluded.updated_at
+    """, (
+        int(control_id), site_id, visit_type, work_status, next_due, created_at, now
+    ))
+    con.commit()
+    con.close()
+    return site_id
+
+
+def cockpit_snapshot():
+    con = connect_db()
+    site_count = con.execute("SELECT COUNT(*) FROM site_registry").fetchone()[0]
+    asset_count = con.execute("SELECT COUNT(*) FROM asset_registry").fetchone()[0]
+    anomalies = con.execute(
+        "SELECT COUNT(*) FROM asset_registry WHERE status='ANOMALIE_A_TRAITER'"
+    ).fetchone()[0]
+    waiting_quotes = con.execute("""
+        SELECT COUNT(*) FROM post_control_workflows
+        WHERE status LIKE '%ATTENTE%' OR status='DEVIS_ENVOYE'
+    """).fetchone()[0]
+    soon = (datetime.now(timezone.utc) + timedelta(days=45)).isoformat(timespec="seconds")
+    due_soon = con.execute("""
+        SELECT COUNT(*) FROM asset_registry
+        WHERE next_due_at IS NOT NULL AND next_due_at <= ?
+    """, (soon,)).fetchone()[0]
+    con.close()
+    return {
+        "sites": site_count,
+        "assets": asset_count,
+        "anomalies": anomalies,
+        "waiting_quotes": waiting_quotes,
+        "due_soon": due_soon,
+    }
+
+
+def cockpit_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 Nouveau repérage", callback_data="desk:newrep"),
+            InlineKeyboardButton("🧰 Nouveau contrôle", callback_data="desk:newctrl"),
+        ],
+        [
+            InlineKeyboardButton("🏢 Parc / sites", callback_data="desk:parc"),
+            InlineKeyboardButton("⏰ À suivre", callback_data="desk:suivi"),
+        ],
+        [InlineKeyboardButton("📋 Procédure BA", callback_data="procba:1")],
+    ])
+
+
+def site_detail(site_id):
+    con = connect_db()
+    site = con.execute("""
+        SELECT id, client, site, address, contact_name, contact_email, contact_tel,
+               status, next_due_at, updated_at
+        FROM site_registry WHERE id=?
+    """, (int(site_id),)).fetchone()
+    if not site:
+        con.close()
+        return None
+    assets = con.execute("""
+        SELECT id, location, brand, model, device_type, serial, dn, status,
+               last_control_at, next_due_at
+        FROM asset_registry WHERE site_id=? ORDER BY id
+    """, (int(site_id),)).fetchall()
+    con.close()
+    return {"site": site, "assets": assets}
+
+
+def _short_date(value):
+    if not value:
+        return "—"
+    try:
+        return datetime.fromisoformat(value).strftime("%d/%m/%Y")
+    except Exception:
+        return str(value)[:10]
 
 
 def allowed_user(user_id):
@@ -2308,28 +2570,209 @@ async def callback_procedure_ba(update: Update, context: ContextTypes.DEFAULT_TY
         await query.message.reply_text(text_value, reply_markup=keyboard)
 
 
+async def cockpit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed_user(update.effective_user.id):
+        await update.effective_message.reply_text("Accès non autorisé.")
+        return
+    snap = cockpit_snapshot()
+    await update.effective_message.reply_text(
+        "🏠 COCKPIT AQUALEO\n\n"
+        f"Sites suivis : {snap['sites']}\n"
+        f"Disconnecteurs enregistrés : {snap['assets']}\n"
+        f"Anomalies à traiter : {snap['anomalies']}\n"
+        f"Devis / réponses en attente : {snap['waiting_quotes']}\n"
+        f"Contrôles arrivant à échéance ≤45 j : {snap['due_soon']}\n\n"
+        "Choisis directement l'action terrain.",
+        reply_markup=cockpit_keyboard(),
+    )
+
+
+async def parc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed_user(update.effective_user.id):
+        await update.effective_message.reply_text("Accès non autorisé.")
+        return
+    con = connect_db()
+    rows = con.execute("""
+        SELECT id, client, site, address, status, next_due_at
+        FROM site_registry ORDER BY updated_at DESC LIMIT 12
+    """).fetchall()
+    con.close()
+    if not rows:
+        await update.effective_message.reply_text("🏢 Aucun site enregistré pour l'instant.")
+        return
+    lines = ["🏢 PARC AQUALEO — sites récents", ""]
+    buttons = []
+    for row in rows:
+        sid, client, site_name, address, status, due = row
+        name = site_name or client or f"Site {sid}"
+        lines.append(f"#{sid} — {name} — {status} — prochain : {_short_date(due)}")
+        buttons.append([InlineKeyboardButton(f"#{sid} {name[:35]}", callback_data=f"desk:site:{sid}")])
+    await update.effective_message.reply_text(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def suivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed_user(update.effective_user.id):
+        await update.effective_message.reply_text("Accès non autorisé.")
+        return
+    con = connect_db()
+    due = con.execute("""
+        SELECT s.id, COALESCE(s.site, s.client, 'Site'), a.location, a.dn, a.next_due_at, a.status
+        FROM asset_registry a
+        JOIN site_registry s ON s.id=a.site_id
+        WHERE a.status='ANOMALIE_A_TRAITER'
+           OR (a.next_due_at IS NOT NULL AND a.next_due_at <= ?)
+        ORDER BY CASE WHEN a.status='ANOMALIE_A_TRAITER' THEN 0 ELSE 1 END, a.next_due_at
+        LIMIT 15
+    """, ((datetime.now(timezone.utc) + timedelta(days=45)).isoformat(timespec="seconds"),)).fetchall()
+    quotes = con.execute("""
+        SELECT p.control_id, p.status, p.due_at, c.site
+        FROM post_control_workflows p
+        LEFT JOIN controls c ON c.id=p.control_id
+        WHERE p.status LIKE '%ATTENTE%' OR p.status='DEVIS_ENVOYE'
+        ORDER BY COALESCE(p.due_at, p.updated_at)
+        LIMIT 10
+    """).fetchall()
+    con.close()
+    lines = ["⏰ À SUIVRE", ""]
+    if due:
+        lines.append("Parc / technique :")
+        for sid, site_name, loc, dn, ndue, status in due:
+            lines.append(f"• #{sid} {site_name} — {loc or 'emplacement ?'} — {dn or 'DN ?'} — {status} — {_short_date(ndue)}")
+    else:
+        lines.append("Aucune anomalie ou échéance ≤45 jours enregistrée.")
+    if quotes:
+        lines.extend(["", "Devis / réponses :"])
+        for control_id, status, due_at, site_name in quotes:
+            lines.append(f"• Dossier {control_id} — {site_name or 'site'} — {status} — relance {_short_date(due_at)}")
+    await update.effective_message.reply_text("\n".join(lines))
+
+
+async def callback_cockpit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not allowed_user(query.from_user.id):
+        await query.answer("Accès non autorisé", show_alert=True)
+        return
+    data = query.data
+    user_id = query.from_user.id
+    chat_id = query.message.chat.id
+
+    if data in {"desk:newrep", "desk:newctrl"}:
+        existing = get_session(user_id, chat_id)
+        if existing:
+            await query.message.reply_text("Un dossier est déjà en cours. Utilise /resume ou /annuler.")
+            return
+        create_session(user_id, chat_id)
+        session = get_session(user_id, chat_id)
+        if data == "desk:newrep":
+            session["data"]["visit_type"] = "REPERAGE_DEVIS"
+            session["data"]["dossier_status"] = "REPERAGE_EN_COURS"
+            save_session(session)
+            await query.message.reply_text(
+                "📋 Nouveau repérage ouvert. Envoie la photo du dossier / ordre d'intervention "
+                "ou écris client, site et adresse."
+            )
+        else:
+            session["data"]["visit_type"] = "MAINTENANCE_CONTROLE_PERIODIQUE"
+            save_session(session)
+            await query.message.reply_text(
+                "🧰 Nouveau contrôle ouvert. Envoie la photo du dossier / ordre d'intervention "
+                "ou écris client, site, adresse et nombre d'appareils."
+            )
+        return
+
+    if data == "desk:parc":
+        con = connect_db()
+        rows = con.execute("""
+            SELECT id, COALESCE(site, client, 'Site'), status, next_due_at
+            FROM site_registry ORDER BY updated_at DESC LIMIT 12
+        """).fetchall()
+        con.close()
+        if not rows:
+            await query.message.reply_text("🏢 Aucun site enregistré pour l'instant.")
+            return
+        buttons = [[InlineKeyboardButton(
+            f"#{sid} {name[:35]}", callback_data=f"desk:site:{sid}"
+        )] for sid, name, _, _ in rows]
+        text_rows = ["🏢 PARC AQUALEO", ""] + [
+            f"#{sid} — {name} — {status} — prochain {_short_date(due)}"
+            for sid, name, status, due in rows
+        ]
+        await query.message.reply_text("\n".join(text_rows), reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data == "desk:suivi":
+        con = connect_db()
+        due = con.execute("""
+            SELECT COALESCE(s.site,s.client,'Site'), a.location, a.dn, a.status, a.next_due_at
+            FROM asset_registry a JOIN site_registry s ON s.id=a.site_id
+            WHERE a.status='ANOMALIE_A_TRAITER'
+               OR (a.next_due_at IS NOT NULL AND a.next_due_at <= ?)
+            ORDER BY a.next_due_at LIMIT 15
+        """, ((datetime.now(timezone.utc)+timedelta(days=45)).isoformat(timespec="seconds"),)).fetchall()
+        con.close()
+        lines=["⏰ À SUIVRE",""]
+        if not due:
+            lines.append("Rien d'urgent enregistré.")
+        else:
+            for site_name, loc, dn, status, ndue in due:
+                lines.append(f"• {site_name} — {loc or 'emplacement ?'} — {dn or 'DN ?'} — {status} — {_short_date(ndue)}")
+        await query.message.reply_text("\n".join(lines))
+        return
+
+    if data.startswith("desk:site:"):
+        try:
+            sid = int(data.rsplit(":",1)[1])
+        except Exception:
+            return
+        detail = site_detail(sid)
+        if not detail:
+            await query.message.reply_text("Site introuvable.")
+            return
+        s = detail["site"]
+        _, client, site_name, address, contact_name, contact_email, contact_tel, status, next_due, _ = s
+        lines = [
+            f"🏢 SITE #{sid}",
+            f"Client : {client or '—'}",
+            f"Site : {site_name or '—'}",
+            f"Adresse : {address or '—'}",
+            f"Contact : {contact_name or '—'}",
+            f"E-mail : {contact_email or '—'}",
+            f"Tél : {contact_tel or '—'}",
+            f"Statut : {status}",
+            f"Prochaine échéance : {_short_date(next_due)}",
+            "",
+            "APPAREILS",
+        ]
+        for a in detail["assets"]:
+            aid, loc, brand, model, dtype, serial, dn, astatus, last_ctrl, next_ctrl = a
+            ident = " ".join(x for x in [brand, model, dtype, dn] if x) or "identité incomplète"
+            lines.append(
+                f"• #{aid} {loc or 'emplacement ?'} — {ident} — {astatus} "
+                f"— dernier {_short_date(last_ctrl)} — prochain {_short_date(next_ctrl)}"
+            )
+        await query.message.reply_text("\n".join(lines))
+        return
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not allowed_user(user_id):
         await update.effective_message.reply_text("Accès non autorisé.")
         return
 
+    snap = cockpit_snapshot()
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.16 — procédure BA + rapport automatique\n\n"
-        "1er passage : maintenance préventive + contrôle périodique + diagnostic.\n"
-        "Rapport : mesures, vérification fonctionnelle, conclusion et traçabilité.\n"
-        "2e passage : réparation uniquement si nécessaire et validée.\n\n"
-        "Prix : aucune estimation fournisseur inventée. "
-        "Chaque tarif utilisé pour un devis devra avoir une source et une date de vérification, "
-        "avec alerte de mise à jour au-delà de 31 jours.\n\n"
-        f"Ton identifiant Telegram : {user_id}\n\n"
-        "/procedureba — guide BA ASTEE/CSTB en 14 manœuvres\n"
-        "/reperage — inventaire du parc puis devis préparé\n"
-        "/reperageauto — inventaire puis devis envoyé automatiquement si possible\n"
-        "/nouveau — contrôle d'un parc déjà prévu\n"
-        "/resume — reprendre\n"
-        "/annuler — clôturer sans validation\n"
-        "/tarifs — état de la base prix"
+        "👋 Discobot Aqualeo V0.17 — cockpit terrain + parc technique\n\n"
+        f"🏢 {snap['sites']} site(s) — 🔩 {snap['assets']} appareil(s) — "
+        f"🔴 {snap['anomalies']} anomalie(s) — ⏰ {snap['due_soon']} échéance(s) ≤45 j\n\n"
+        "Le dossier se construit pendant l'intervention : photos, identité appareil, "
+        "procédure, mesures, anomalies, rapport, devis et historique.\n\n"
+        "Choisis l'action terrain :",
+        reply_markup=cockpit_keyboard(),
     )
 
 
@@ -2960,11 +3403,16 @@ async def callback_post_control(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def post_init(application):
     await application.bot.set_my_commands([
-        BotCommand("start", "Accueil Discobot"),
+        BotCommand("start", "Accueil / cockpit"),
+        BotCommand("cockpit", "Cockpit terrain"),
+        BotCommand("reperage", "Repérage puis devis"),
         BotCommand("nouveau", "Nouveau contrôle"),
-        BotCommand("resume", "Reprendre le contrôle"),
-        BotCommand("annuler", "Annuler le contrôle"),
-        BotCommand("tarifs", "État des prix fournisseurs"),
+        BotCommand("parc", "Sites et appareils"),
+        BotCommand("suivi", "Anomalies, échéances, devis"),
+        BotCommand("procedureba", "Guide BA ASTEE/CSTB"),
+        BotCommand("resume", "Reprendre le dossier"),
+        BotCommand("annuler", "Clôturer sans validation"),
+        BotCommand("tarifs", "Grille et prix"),
     ])
 
 
@@ -2983,6 +3431,9 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("cockpit", cockpit))
+    app.add_handler(CommandHandler("parc", parc))
+    app.add_handler(CommandHandler("suivi", suivi))
     app.add_handler(CommandHandler("nouveau", nouveau))
     app.add_handler(CommandHandler("procedureba", procedureba))
     app.add_handler(CommandHandler("reperage", reperage))
@@ -2990,6 +3441,7 @@ def main():
     app.add_handler(CommandHandler("resume", resume))
     app.add_handler(CommandHandler("annuler", annuler))
     app.add_handler(CommandHandler("tarifs", tarifs))
+    app.add_handler(CallbackQueryHandler(callback_cockpit, pattern=r"^desk:"))
     app.add_handler(CallbackQueryHandler(callback_procedure_ba_result, pattern=r"^procbares:"))
     app.add_handler(CallbackQueryHandler(callback_procedure_ba, pattern=r"^procba:"))
     app.add_handler(CallbackQueryHandler(callback_result, pattern=r"^result:"))
