@@ -219,7 +219,7 @@ def status_keyboard():
             InlineKeyboardButton("⏭ Passer", callback_data="status:passed"),
             InlineKeyboardButton("⚠️ Impossible", callback_data="status:impossible"),
         ],
-        [InlineKeyboardButton("❔ Non vérifiable", callback_data="status:non_verifiable")],
+        [InlineKeyboardButton("🟡 Non vérifiable", callback_data="status:non_verifiable")],
     ])
 
 
@@ -227,16 +227,16 @@ def step_keyboard(key):
     if key in {"vanne_amont", "vanne_aval"}:
         return InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("✅ Ferme bien", callback_data=f"result:{key}:ok"),
-                InlineKeyboardButton("💧 Laisse passer", callback_data=f"result:{key}:leak"),
+                InlineKeyboardButton("🟢 Ferme bien", callback_data=f"result:{key}:ok"),
+                InlineKeyboardButton("🔴 Laisse passer", callback_data=f"result:{key}:leak"),
             ],
             [InlineKeyboardButton("❔ Non vérifiable", callback_data=f"result:{key}:nv")],
         ])
     if key == "clapets":
         return InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("✅ RAS", callback_data="result:clapets:ok"),
-                InlineKeyboardButton("⚠️ Anomalie", callback_data="result:clapets:anomaly"),
+                InlineKeyboardButton("🟢 RAS", callback_data="result:clapets:ok"),
+                InlineKeyboardButton("🔴 Anomalie", callback_data="result:clapets:anomaly"),
             ],
             [InlineKeyboardButton("❔ Non vérifiable", callback_data="result:clapets:nv")],
         ])
@@ -259,8 +259,8 @@ def is_sferaco_ba574(data):
     return ("sferaco" in ident or "scudo" in ident) and ("ba574" in ident or "950" in ident)
 
 
-def parse_pressure_bar(value):
-    """Convertit une saisie bar/mbar en bar. Retourne None si la valeur n'est pas exploitable."""
+def parse_pressure_bar(value, differential=False):
+    """Convertit une saisie bar/mbar en bar. Pour un différentiel nu, 120/380 = mbar."""
     if value is None or isinstance(value, dict):
         return None
     text = str(value).lower().replace(",", ".").strip()
@@ -268,8 +268,14 @@ def parse_pressure_bar(value):
     if not m:
         return None
     number = float(m.group(1))
-    unit = (m.group(2) or "bar").lower()
-    return number / 1000.0 if unit == "mbar" else number
+    unit = (m.group(2) or "").lower()
+    if unit == "mbar":
+        return number / 1000.0
+    if unit == "bar":
+        return number
+    if differential and abs(number) >= 10:
+        return number / 1000.0
+    return number
 
 
 def contains_any(value, words):
@@ -277,6 +283,99 @@ def contains_any(value, words):
         return False
     text = str(value).lower()
     return any(w in text for w in words)
+
+
+def positive_leak(value):
+    """Détecte une fuite sans transformer 'pas de fuite' en défaut."""
+    if value is None:
+        return False
+    text = str(value).lower()
+    negatives = [
+        "pas de fuite", "aucune fuite", "sans fuite", "ne fuit pas",
+        "pas d'écoulement", "pas d ecoulement", "aucun écoulement",
+        "aucun ecoulement", "sec", "ras"
+    ]
+    if any(n in text for n in negatives):
+        return False
+    return any(w in text for w in [
+        "fuite", "coule", "écoulement", "ecoulement", "pisse",
+        "goutte", "décharge permanente", "decharge permanente"
+    ])
+
+
+def is_help_request(text):
+    t = (text or "").strip().lower()
+    compact = re.sub(r"[^a-zà-ÿ0-9? ]+", " ", t)
+    compact = re.sub(r"\s+", " ", compact).strip()
+    if compact in {"?", "aide", "help", "comment", "quoi", "je fais quoi", "quoi faire",
+                   "etape a suivre", "étape a suivre", "etape à suivre", "étape à suivre",
+                   "explique", "explique moi"}:
+        return True
+    return any(x in compact for x in ["comment je fais", "quelle etape", "quelle étape", "tu peux expliquer"])
+
+
+def normalize_measurement_value(key, raw):
+    text = str(raw).strip().replace(",", ".")
+    if re.fullmatch(r"-?\d+(?:\.\d+)?", text):
+        number = float(text)
+        if key == "differentiel":
+            if abs(number) >= 10:
+                return f"{text} mbar"
+            return f"{text} bar"
+        return f"{text} bar"
+    return str(raw).strip()
+
+
+def parse_measurement_bundle(text, current_key):
+    """Accepte P1/P2/P3/ΔP en une fois, ou 4 lignes numériques dans cet ordre."""
+    raw = (text or "").strip()
+    out = {}
+    patterns = {
+        "pression_amont": r"(?:\bP1\b|pression\s*amont)\s*[:=\-]?\s*(-?\d+(?:[.,]\d+)?)\s*(mbar|bar)?",
+        "pression_zone": r"(?:\bP2\b|zone\s*interm[ée]diaire)\s*[:=\-]?\s*(-?\d+(?:[.,]\d+)?)\s*(mbar|bar)?",
+        "pression_aval": r"(?:\bP3\b|pression\s*aval)\s*[:=\-]?\s*(-?\d+(?:[.,]\d+)?)\s*(mbar|bar)?",
+        "differentiel": r"(?:diff[ée]rentiel|ΔP|delta\s*p|P1\s*[-–]\s*P2)\s*[:=\-]?\s*(-?\d+(?:[.,]\d+)?)\s*(mbar|bar)?",
+    }
+    for key, pat in patterns.items():
+        m = re.search(pat, raw, re.IGNORECASE)
+        if m:
+            val = m.group(1).replace(",", ".")
+            unit = (m.group(2) or "").lower()
+            out[key] = normalize_measurement_value(key, val + (f" {unit}" if unit else ""))
+
+    if out:
+        return out
+
+    lines = [x.strip() for x in raw.splitlines() if x.strip()]
+    if current_key == "pression_amont" and len(lines) == 4 and all(re.fullmatch(r"-?\d+(?:[.,]\d+)?", x) for x in lines):
+        return {
+            "pression_amont": normalize_measurement_value("pression_amont", lines[0]),
+            "pression_zone": normalize_measurement_value("pression_zone", lines[1]),
+            "pression_aval": normalize_measurement_value("pression_aval", lines[2]),
+            "differentiel": normalize_measurement_value("differentiel", lines[3]),
+        }
+    return {}
+
+
+def merge_photo_device_data(data, extracted_device):
+    """Une photo complète les champs manquants mais n'écrase jamais l'identité déjà attribuée à l'appareil."""
+    target = data.setdefault("current_device", {})
+    valid = {x[0] for x in DEVICE_STEPS}
+    identity_keys = {"marque", "modele", "type", "serie", "diametre"}
+    conflicts = []
+    for k, v in (extracted_device or {}).items():
+        v = clean_value(v)
+        if v is None or k not in valid:
+            continue
+        if not has_answer(target.get(k)):
+            target[k] = v
+        elif k in identity_keys and str(target.get(k)).strip().lower() != str(v).strip().lower():
+            conflicts.append((k, target.get(k), v))
+    return conflicts
+
+
+def valve_leaks(value):
+    return contains_any(value, ["laisse passer", "non étanche", "non etanche", "fuite"])
 
 
 def live_diagnostic(data):
@@ -292,86 +391,148 @@ def live_diagnostic(data):
     p1 = parse_pressure_bar(d.get("pression_amont"))
     p2 = parse_pressure_bar(d.get("pression_zone"))
     p3 = parse_pressure_bar(d.get("pression_aval"))
-    dp = parse_pressure_bar(d.get("differentiel"))
+    dp = parse_pressure_bar(d.get("differentiel"), differential=True)
     if dp is None and p1 is not None and p2 is not None:
         dp = p1 - p2
 
-    aval_leaks = contains_any(vanne_aval, ["laisse passer", "non étanche", "fuite"])
-    amont_leaks = contains_any(vanne_amont, ["laisse passer", "non étanche", "fuite"])
-    discharge_leak = contains_any(essais, ["décharge", "decharge", "fuite", "coule", "écoulement", "ecoulement", "pisse"])
+    aval_leaks = valve_leaks(vanne_aval)
+    amont_leaks = valve_leaks(vanne_amont)
+    discharge_leak = positive_leak(essais)
+    no_discharge_leak = contains_any(essais, ["pas de fuite", "aucune fuite", "sans fuite", "pas d'écoulement", "pas d ecoulement"])
     pressure_rises = contains_any(essais, ["remonte", "remontée", "remontee", "réalimente", "realimente"])
-    clapet_anomaly = contains_any(clapets, ["anomalie", "fuite", "défaut", "defaut"])
+    clapet_anomaly = contains_any(clapets, ["anomalie", "défaut", "defaut"]) or positive_leak(clapets)
 
     if aval_leaks:
         lines.append(
-            "🔴 La VANNE AVAL extérieure laisse passer. C'est un défaut réel de la vanne d'isolement, "
-            "mais cela ne prouve PAS que le clapet aval interne du disconnecteur est HS."
+            "🔴 Défaut CONFIRMÉ sur la VANNE AVAL extérieure : elle ne tient pas l'isolement. "
+            "Cela ne prouve pas que le clapet aval interne du disconnecteur est défectueux."
         )
-        lines.append(
-            "➡️ Conséquence : l'aval n'est pas correctement isolé ; certains essais peuvent être faussés. "
-            "Il faut distinguer la vanne extérieure du clapet interne."
-        )
-
     if amont_leaks:
         lines.append(
-            "🔴 La VANNE AMONT extérieure laisse passer. Tant que l'amont n'est pas isolé correctement, "
-            "les essais d'étanchéité internes peuvent être difficiles à interpréter."
+            "🔴 Défaut CONFIRMÉ sur la VANNE AMONT extérieure : elle ne tient pas l'isolement. "
+            "Les essais internes doivent être interprétés avec prudence tant que l'isolement amont n'est pas fiable."
         )
 
-    if is_sferaco_ba574(data) and dp is not None:
+    if dp is not None:
         mbar = round(dp * 1000)
-        if dp < 0.14:
-            lines.append(
-                f"🔴 Différentiel P1-P2 = {mbar} mbar : inférieur aux 140 mbar utilisés pour ce BA574 identifié. "
-                "La mise à décharge peut donc être cohérente avec la fonction de sécurité."
-            )
-            lines.append(
-                "➡️ Mais on ne connaît pas encore la cause : P2 peut être trop haute, P1 trop basse, "
-                "un clapet peut fuir, une pression aval peut influencer le système, ou la décharge elle-même peut être en défaut."
-            )
+        if is_sferaco_ba574(data):
+            if dp < 0.14:
+                lines.append(
+                    f"🔴 P1-P2 = {mbar} mbar : sous le seuil de 140 mbar utilisé uniquement pour ce BA574 identifié. "
+                    "La mise à décharge peut être cohérente avec sa fonction de sécurité, mais la cause reste à isoler."
+                )
+            else:
+                lines.append(
+                    f"🟢 P1-P2 = {mbar} mbar : au-dessus du seuil de 140 mbar pour ce BA574 identifié."
+                )
         else:
             lines.append(
-                f"🟢 Différentiel P1-P2 = {mbar} mbar : supérieur ou égal à 140 mbar pour ce BA574 identifié. "
-                "Une fuite permanente à la décharge demanderait alors de chercher une autre cause au lieu d'accuser automatiquement un clapet."
+                f"🔵 Différentiel mesuré P1-P2 = {mbar} mbar. "
+                "Discobot ne déclare pas conforme/non conforme sur cette seule valeur tant que le critère constructeur du modèle n'est pas identifié."
             )
 
     if discharge_leak:
         lines.append(
-            "💧 Une fuite à la décharge est un SYMPTÔME, pas un diagnostic. "
-            "À elle seule, elle ne permet pas de conclure « vanne aval » ou « clapet aval »."
+            "💧 Écoulement à la décharge CONFIRMÉ comme symptôme. Il ne désigne pas à lui seul le clapet fautif."
         )
         lines.append(
-            "🧠 Ordre logique : 1) vérifier les vannes d'isolement, 2) relever P1/P2/P3, "
-            "3) mesurer P1-P2, 4) voir de quel côté une pression revient après isolement, "
-            "5) seulement ensuite désigner l'organe probable."
+            "➡️ Suite logique : vérifier les deux vannes d'isolement, observer quelle pression remonte après isolement, "
+            "puis seulement attribuer le défaut à la vanne extérieure, au clapet amont, au clapet aval ou au dispositif de décharge."
         )
+    elif no_discharge_leak:
+        lines.append("🟢 Aucun écoulement permanent à la décharge n'a été constaté pendant l'essai saisi.")
 
     if p3 is not None and p2 is not None and p3 > p2:
         lines.append(
-            "🔵 P3 est supérieure à P2. Il existe une pression aval capable de solliciter le clapet aval interne. "
-            "Ce chiffre seul ne prouve pas sa fuite : il faut vérifier s'il y a réellement transfert de pression de P3 vers P2."
+            "🔵 P3 est supérieure à P2 : l'aval peut solliciter le clapet aval. "
+            "Il faut constater un transfert réel de pression vers P2 avant d'accuser ce clapet."
         )
 
     if pressure_rises:
         lines.append(
-            "🔎 Tu as signalé une remontée de pression. La prochaine question est : DE QUEL CÔTÉ vient-elle ? "
-            "Si elle réapparaît derrière une vanne extérieure fermée, cette vanne laisse passer. "
-            "Si, vannes correctement isolées, une pression aval se transmet vers la zone P2, le clapet aval interne devient suspect."
+            "🔎 Une remontée de pression est signalée. Il faut identifier sa provenance : "
+            "derrière une vanne extérieure fermée = vanne suspecte ; transfert P3→P2 avec isolement fiable = clapet aval suspect ; "
+            "reconstitution P1→P2 lors du test amont = clapet amont suspect."
         )
 
-    if clapet_anomaly and not lines:
+    if clapet_anomaly and not discharge_leak:
         lines.append(
-            "🟡 Anomalie sur clapet/décharge notée. On ne remplace rien sur cette seule observation : "
-            "on confirme avec les pressions et l'essai d'isolement."
+            "🟡 Anomalie clapet/décharge notée, mais aucune pièce ne doit être condamnée sans mesure ou essai d'isolement qui l'identifie."
         )
 
     if not lines and any(v is not None for v in (p1, p2, p3, dp)):
-        lines.append(
-            "🔵 Mesures enregistrées. Pour l'instant, Discobot ne force aucun diagnostic : "
-            "il attend la corrélation entre pressions, isolement des vannes et comportement de la décharge."
-        )
+        lines.append("🔵 Mesures enregistrées. Aucun défaut n'est encore suffisamment isolé pour désigner une pièce.")
 
     return "\n\n".join(lines)
+
+
+def auto_diagnosis(data):
+    d = data.get("current_device", {})
+    issues = []
+    uncertain = []
+
+    if valve_leaks(d.get("vanne_amont")):
+        issues.append("Vanne amont extérieure non étanche au contrôle.")
+    if valve_leaks(d.get("vanne_aval")):
+        issues.append("Vanne aval extérieure non étanche au contrôle.")
+
+    leak = positive_leak(d.get("essais"))
+    pressure_rises = contains_any(d.get("essais"), ["remonte", "remontée", "remontee", "réalimente", "realimente"])
+    dp = parse_pressure_bar(d.get("differentiel"), differential=True)
+    p1 = parse_pressure_bar(d.get("pression_amont"))
+    p2 = parse_pressure_bar(d.get("pression_zone"))
+    if dp is None and p1 is not None and p2 is not None:
+        dp = p1 - p2
+
+    if leak:
+        if is_sferaco_ba574(data) and dp is not None and dp < 0.14:
+            uncertain.append(
+                f"Écoulement persistant à la décharge avec P1-P2 ≈ {round(dp*1000)} mbar. "
+                "Anomalie confirmée, mais l'organe interne responsable n'est pas encore isolé."
+            )
+        else:
+            uncertain.append(
+                "Écoulement persistant à la décharge confirmé. Cause interne non attribuée tant que l'essai d'isolement ne désigne pas l'organe."
+            )
+    if pressure_rises:
+        uncertain.append("Remontée de pression signalée : provenance à isoler avant de condamner un clapet.")
+
+    clapets = d.get("clapets")
+    if contains_any(clapets, ["anomalie", "défaut", "defaut"]) and not leak:
+        uncertain.append("Anomalie clapet/décharge signalée mais non encore isolée par une mesure.")
+
+    if not issues and not uncertain:
+        return (
+            "Aucune anomalie technique mise en évidence dans les essais enregistrés. "
+            "Les vannes/mesures non vérifiables restent exclues de cette conclusion."
+        )
+
+    parts = []
+    if issues:
+        parts.append("Défaut(s) confirmé(s) : " + " ".join(issues))
+    if uncertain:
+        parts.append("À confirmer avant devis de pièce interne : " + " ".join(uncertain))
+    return " ".join(parts)
+
+
+def auto_recommendation(data):
+    d = data.get("current_device", {})
+    actions = []
+    if valve_leaks(d.get("vanne_amont")):
+        actions.append("prévoir réparation/remplacement de la vanne amont extérieure puis refaire l'essai")
+    if valve_leaks(d.get("vanne_aval")):
+        actions.append("prévoir réparation/remplacement de la vanne aval extérieure puis refaire l'essai")
+    if positive_leak(d.get("essais")) or contains_any(d.get("essais"), ["remonte", "remontée", "remontee"]):
+        actions.append("ne pas deviser de clapet interne tant que le contrôle complémentaire n'a pas isolé précisément la cause")
+    if not actions:
+        return "Aucune réparation à prévoir sur les éléments contrôlés ; archiver le contrôle."
+    return " ; ".join(actions) + "."
+
+
+def autofill_diagnosis_and_recommendation(data):
+    d = data.setdefault("current_device", {})
+    d["diagnostic"] = auto_diagnosis(data)
+    d["recommandation"] = auto_recommendation(data)
 
 
 def guided_prompt(session, key, base_prompt):
@@ -429,9 +590,12 @@ def guided_prompt(session, key, base_prompt):
             "👉 Choisis ensuite simplement le bouton correspondant."
         ),
         "clapets": (
-            "🔧 Ne démonte pas tout de suite. On contrôle d'abord le comportement. "
-            "Observe la décharge et les pressions pendant les manœuvres des vannes. "
-            "Une fuite continue ou un comportement anormal doit être noté comme anomalie ; Discobot proposera ensuite la zone probable à inspecter."
+            "🔧 CONTRÔLE CLAPETS / DÉCHARGE — sans conclure trop vite.\n"
+            "1. Observe d'abord la décharge appareil en service : sèche, goutte à goutte ou écoulement continu ?\n"
+            "2. Note ce comportement AVANT de démonter quoi que ce soit.\n"
+            "3. Pendant les manœuvres prévues, regarde comment évoluent P1, P2 et P3 et si la décharge s'ouvre/se referme.\n"
+            "4. Une fuite à la décharge est un symptôme : elle ne prouve pas à elle seule quel clapet est en cause.\n"
+            "5. Si le comportement est normal, choisis RAS. Si tu vois un défaut, choisis Anomalie. Si l'essai n'est pas exploitable, Non vérifiable."
         ),
         "pression_amont": (
             "📏 Branche le manomètre AMONT sur la prise amont identifiée par le constructeur. "
@@ -929,11 +1093,13 @@ async def advance(session, chat_id, value, context):
     idx = session["current_step"]
     answered_key, _, _, _ = get_step(idx)
     save_current_value(session, value)
+
+    if answered_key == "essais":
+        autofill_diagnosis_and_recommendation(session["data"])
+
     session["current_step"] = next_missing_step(session, idx + 1)
     save_session(session)
 
-    # Après les étapes qui changent réellement le diagnostic, Discobot explique
-    # ce que l'observation prouve — et surtout ce qu'elle ne prouve pas.
     if answered_key in {"vanne_amont", "vanne_aval", "differentiel", "essais"}:
         note = live_diagnostic(session["data"])
         if note:
@@ -941,6 +1107,18 @@ async def advance(session, chat_id, value, context):
                 chat_id=chat_id,
                 text="🧠 LECTURE PROVISOIRE\n\n" + note,
             )
+
+    if answered_key == "essais":
+        d = session["data"].get("current_device", {})
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "🧾 DIAGNOSTIC AUTOMATIQUE\n\n"
+                + d.get("diagnostic", "—")
+                + "\n\n🔧 SUITE PROPOSÉE\n"
+                + d.get("recommandation", "—")
+            ),
+        )
 
     if session["current_step"] >= len(ALL_STEPS):
         await complete_current_device(session, chat_id, context)
@@ -955,7 +1133,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.5 — diagnostic guidé intelligent\n\n"
+        "👋 Discobot Aqualeo V0.6 — diagnostic automatique\n\n"
         "1er passage : contrôle + diagnostic.\n"
         "2e passage : intervention uniquement si nécessaire.\n\n"
         "Prix : aucune estimation fournisseur inventée. "
@@ -1073,12 +1251,19 @@ async def callback_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Cette étape n'est plus active.", show_alert=True)
         return
 
-    labels = {
-        "ok": "fermeture correcte / étanche au contrôle",
-        "leak": "laisse passer / fermeture non étanche",
-        "nv": {"status": "non_verifiable"},
-        "anomaly": "anomalie constatée",
-    }
+    if key == "clapets":
+        labels = {
+            "ok": "RAS au contrôle clapets / décharge",
+            "anomaly": "anomalie constatée sur clapets / décharge",
+            "nv": {"status": "non_verifiable"},
+        }
+    else:
+        labels = {
+            "ok": "fermeture correcte / étanche au contrôle",
+            "leak": "laisse passer / fermeture non étanche",
+            "nv": {"status": "non_verifiable"},
+            "anomaly": "anomalie constatée",
+        }
     value = labels.get(result, result)
     await advance(session, chat_id, value, context)
 
@@ -1127,8 +1312,8 @@ async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key, _, kind, _ = get_step(idx)
     msg = update.effective_message
 
-    # Une photo peut être envoyée dès la création du dossier, même si l'étape attend du texte.
-    if msg.photo and kind != "photo":
+    # Photo de dossier au tout début : extraction globale autorisée.
+    if msg.photo and kind != "photo" and idx < len(SITE_STEPS):
         photo = msg.photo[-1]
         session["data"].setdefault("source_photos", []).append({
             "photo_file_id": photo.file_id,
@@ -1148,46 +1333,43 @@ async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await send_step(chat_id, session, context)
         else:
             save_session(session)
-            if AI_CLIENT is None:
-                await msg.reply_text(
-                    "📷 Photo enregistrée. La lecture intelligente de la photo n'est pas encore activée sur le serveur.\n\n"
-                    "En attendant, envoie-moi UNE seule phrase avec ce que tu as : "
-                    "client/établissement + adresse + contact utile. Je répartirai les infos tout seul."
-                )
-            else:
-                await msg.reply_text(
-                    "📷 Photo enregistrée, mais je n'ai pas pu lire d'information certaine.\n\n"
-                    "Envoie-moi simplement les infos lisibles en UNE phrase ; je ne te ferai pas remplir les champs un par un."
-                )
+            await msg.reply_text(
+                "📷 Photo enregistrée, mais aucune information certaine n'a pu être extraite. "
+                "Envoie client/site/adresse en une seule phrase."
+            )
         return
 
-    # Pendant le contrôle, la photo est archivée et peut aussi préremplir marque / modèle / DN / série.
+    # Photo terrain : elle appartient UNIQUEMENT à l'appareil courant.
     if kind == "photo":
         if not msg.photo:
             await msg.reply_text("J'attends une photo. Sinon utilise Passer / Impossible / Non vérifiable.")
             return
 
         photo = msg.photo[-1]
-        save_current_value(
-            session,
-            {
-                "photo_file_id": photo.file_id,
-                "file_unique_id": photo.file_unique_id,
-                "width": photo.width,
-                "height": photo.height,
-                "archive_status": "A_TELECHARGER_DANS_DOSSIER_APPAREIL",
-            },
-        )
+        save_current_value(session, {
+            "photo_file_id": photo.file_id,
+            "file_unique_id": photo.file_unique_id,
+            "width": photo.width,
+            "height": photo.height,
+            "archive_status": "A_TELECHARGER_DANS_DOSSIER_APPAREIL",
+        })
 
         extracted = await extract_from_message(update, context, include_photo=True)
+        conflicts = []
         if extraction_has_data(extracted) and extracted.get("devices"):
-            valid_device_keys = {x[0] for x in DEVICE_STEPS}
-            for k, v in extracted["devices"][0].items():
-                if clean_value(v) is not None and k in valid_device_keys:
-                    session["data"].setdefault("current_device", {})[k] = clean_value(v)
+            conflicts = merge_photo_device_data(session["data"], extracted["devices"][0])
 
         session["current_step"] = next_missing_step(session, idx + 1)
         save_session(session)
+
+        if conflicts:
+            labels = {"marque":"marque","modele":"modèle","type":"type","serie":"n° série","diametre":"DN"}
+            txt = ["⚠️ La photo suggère une identité différente du dossier. Je N'ÉCRASE rien automatiquement :"]
+            for k, old, new in conflicts:
+                txt.append(f"• {labels.get(k,k)} : dossier = {old} / photo = {new}")
+            txt.append("Si la photo est la bonne référence, écris simplement la correction quand je te demande ce champ.")
+            await msg.reply_text("\n".join(txt))
+
         if session["current_step"] >= len(ALL_STEPS):
             await complete_current_device(session, chat_id, context)
         else:
@@ -1199,35 +1381,68 @@ async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("J'attends une réponse texte, ou utilise un bouton de statut.")
         return
 
-    # Une phrase peut contenir plusieurs informations : Discobot les répartit dans les bons champs.
-    extracted = await extract_from_message(update, context, include_photo=False)
-    apply_extraction(session, extracted)
+    if is_help_request(text):
+        await msg.reply_text("👍 Je reste sur cette étape. Voici exactement quoi faire :")
+        await send_step(chat_id, session, context)
+        return
 
+    # Partie dossier : l'IA peut répartir une phrase dans plusieurs champs.
     if idx < len(SITE_STEPS):
+        extracted = await extract_from_message(update, context, include_photo=False)
+        apply_extraction(session, extracted)
         bucket = session["data"].setdefault("site", {})
-    else:
-        bucket = session["data"].setdefault("current_device", {})
-        if extracted and extracted.get("devices"):
-            valid_device_keys = {x[0] for x in DEVICE_STEPS}
-            for k, v in extracted["devices"][0].items():
-                if clean_value(v) is not None and k in valid_device_keys:
-                    bucket[k] = clean_value(v)
+        smart_found = extraction_has_data(extracted)
+        if not has_answer(bucket.get(key)) and not smart_found:
+            bucket[key] = text
+        session["current_step"] = next_missing_step(session, 0 if smart_found else idx + 1)
+        save_session(session)
+        if smart_found:
+            await msg.reply_text(build_intake_preview(session["data"]))
+        if session["current_step"] >= len(ALL_STEPS):
+            await complete_current_device(session, chat_id, context)
+        else:
+            await send_step(chat_id, session, context)
+        return
 
-    # Si le message contient clairement d'autres champs (ex. site + adresse),
-    # on ne le force jamais dans le champ actuellement demandé.
-    smart_found = extraction_has_data(extracted)
-    if not has_answer(bucket.get(key)) and not smart_found:
-        bucket[key] = text
+    # Partie technique : PAS d'extraction globale. Le texte ne peut plus modifier le client/contact ni un autre appareil.
+    device = session["data"].setdefault("current_device", {})
 
-    if smart_found:
-        restart_at = 0 if idx < len(SITE_STEPS) else len(SITE_STEPS)
-        session["current_step"] = next_missing_step(session, restart_at)
-    else:
-        session["current_step"] = next_missing_step(session, idx + 1)
+    if key in {"pression_amont", "pression_zone", "pression_aval", "differentiel"}:
+        bundle = parse_measurement_bundle(text, key)
+        if bundle:
+            for k, v in bundle.items():
+                device[k] = v
+            session["current_step"] = next_missing_step(session, idx + 1)
+            save_session(session)
+            await msg.reply_text(
+                "📏 Mesures réparties : "
+                + " | ".join(f"{k.replace('pression_','P ').replace('differentiel','ΔP')} = {v}" for k, v in bundle.items())
+            )
+            if session["current_step"] >= len(ALL_STEPS):
+                await complete_current_device(session, chat_id, context)
+            else:
+                await send_step(chat_id, session, context)
+            return
+        text = normalize_measurement_value(key, text)
+
+    # Tout le reste est enregistré exactement dans le champ demandé.
+    device[key] = text
+    if key == "essais":
+        autofill_diagnosis_and_recommendation(session["data"])
+
+    session["current_step"] = next_missing_step(session, idx + 1)
     save_session(session)
 
-    if extraction_has_data(extracted) and idx < len(SITE_STEPS):
-        await msg.reply_text(build_intake_preview(session["data"]))
+    if key == "essais":
+        note = live_diagnostic(session["data"])
+        if note:
+            await msg.reply_text("🧠 LECTURE PROVISOIRE\n\n" + note)
+        await msg.reply_text(
+            "🧾 DIAGNOSTIC AUTOMATIQUE\n\n"
+            + device.get("diagnostic", "—")
+            + "\n\n🔧 SUITE PROPOSÉE\n"
+            + device.get("recommandation", "—")
+        )
 
     if session["current_step"] >= len(ALL_STEPS):
         await complete_current_device(session, chat_id, context)
