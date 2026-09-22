@@ -193,7 +193,13 @@ ASTEE_BA_STEPS = [
 
 
 def procedure_ba_keyboard(step_no):
-    rows = []
+    rows = [
+        [
+            InlineKeyboardButton("✅ Réalisé / OK", callback_data=f"procbares:{step_no}:ok"),
+            InlineKeyboardButton("🔴 Défaut", callback_data=f"procbares:{step_no}:defaut"),
+        ],
+        [InlineKeyboardButton("🟡 Non vérifiable", callback_data=f"procbares:{step_no}:nv")],
+    ]
     nav = []
     if step_no > 1:
         nav.append(InlineKeyboardButton("⬅️ Précédente", callback_data=f"procba:{step_no-1}"))
@@ -214,6 +220,7 @@ def procedure_ba_text(step_no):
         f"👉 MANŒUVRE\n{s['action']}\n\n"
         f"🔎 À OBSERVER / INTERPRÉTER\n{s['check']}\n\n"
         f"Source : {ASTEE_BA_SOURCE}\n"
+        "📝 Si un contrôle est en cours, ton bouton de résultat est enregistré dans le dossier et repris dans le rapport.\n"
         "⚠️ Les numéros de robinets correspondent au schéma ASTEE. "
         "Quand la mallette exacte est connue, Discobot doit charger son mapping propre au lieu de deviner."
     )
@@ -1426,6 +1433,14 @@ def build_summary(data):
             f"• ΔP ouverture décharge : {value_text(d.get('differentiel','—'))}",
             f"• Bilan essai : {value_text(d.get('essais','—'))}",
             "",
+            "PROCÉDURE BA / TRAÇABILITÉ",
+            f"• Référence : {value_text(d.get('procedure_ba_source','—'))}",
+            *[
+                f"• {i}/14 — {ASTEE_BA_STEPS[i-1]['title']} : "
+                + value_text((d.get("procedure_ba_results") or {}).get(str(i), {}).get("label", "NON RENSEIGNÉ"))
+                for i in range(1, 15)
+            ],
+            "",
             "🧠 DIAGNOSTIC AUTOMATIQUE",
             value_text(d.get("diagnostic","—")),
             "",
@@ -2197,6 +2212,77 @@ async def procedureba(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def callback_procedure_ba_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not allowed_user(query.from_user.id):
+        await query.answer("Accès non autorisé", show_alert=True)
+        return
+
+    parts = query.data.split(":")
+    if len(parts) != 3:
+        return
+    _, raw_step, status = parts
+    try:
+        step_no = int(raw_step)
+    except Exception:
+        return
+    if not (1 <= step_no <= len(ASTEE_BA_STEPS)) or status not in {"ok", "defaut", "nv"}:
+        return
+
+    session = get_session(query.from_user.id, query.message.chat.id)
+    if not session:
+        await query.message.reply_text(
+            "📋 Guide consulté, mais aucun contrôle n'est ouvert : résultat non archivé. "
+            "Lance /nouveau pour créer un dossier."
+        )
+        return
+
+    data = session["data"]
+    current = data.setdefault("current_device", {})
+    results = current.setdefault("procedure_ba_results", {})
+    step = ASTEE_BA_STEPS[step_no - 1]
+    labels = {
+        "ok": "RÉALISÉ / OK",
+        "defaut": "DÉFAUT CONSTATÉ",
+        "nv": "NON VÉRIFIABLE",
+    }
+    results[str(step_no)] = {
+        "title": step["title"],
+        "status": status,
+        "label": labels[status],
+        "recorded_at": now_iso(),
+        "source": ASTEE_BA_SOURCE,
+    }
+    current["procedure_ba_source"] = ASTEE_BA_SOURCE
+    current["procedure_ba_last_step"] = step_no
+    save_session(session)
+
+    completed = len(results)
+    await query.message.reply_text(
+        f"📝 Étape {step_no}/14 enregistrée : {labels[status]}. "
+        f"Traçabilité BA : {completed}/14 étape(s) renseignée(s)."
+    )
+
+    next_step = min(step_no + 1, len(ASTEE_BA_STEPS))
+    if step_no < len(ASTEE_BA_STEPS):
+        try:
+            await query.edit_message_text(
+                procedure_ba_text(next_step),
+                reply_markup=procedure_ba_keyboard(next_step),
+            )
+        except Exception:
+            await query.message.reply_text(
+                procedure_ba_text(next_step),
+                reply_markup=procedure_ba_keyboard(next_step),
+            )
+    else:
+        await query.message.reply_text(
+            "✅ Les 14 manœuvres ont été parcourues. "
+            "Discobot conservera leurs résultats dans le rapport de l'appareil."
+        )
+
+
 async def callback_procedure_ba(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -2229,7 +2315,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.15 — guide ASTEE BA 14 manœuvres\n\n"
+        "👋 Discobot Aqualeo V0.16 — procédure BA + rapport automatique\n\n"
         "1er passage : maintenance préventive + contrôle périodique + diagnostic.\n"
         "Rapport : mesures, vérification fonctionnelle, conclusion et traçabilité.\n"
         "2e passage : réparation uniquement si nécessaire et validée.\n\n"
@@ -2904,6 +2990,7 @@ def main():
     app.add_handler(CommandHandler("resume", resume))
     app.add_handler(CommandHandler("annuler", annuler))
     app.add_handler(CommandHandler("tarifs", tarifs))
+    app.add_handler(CallbackQueryHandler(callback_procedure_ba_result, pattern=r"^procbares:"))
     app.add_handler(CallbackQueryHandler(callback_procedure_ba, pattern=r"^procba:"))
     app.add_handler(CallbackQueryHandler(callback_result, pattern=r"^result:"))
     app.add_handler(CallbackQueryHandler(callback_status, pattern=r"^status:"))
