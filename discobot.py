@@ -259,6 +259,121 @@ def is_sferaco_ba574(data):
     return ("sferaco" in ident or "scudo" in ident) and ("ba574" in ident or "950" in ident)
 
 
+def parse_pressure_bar(value):
+    """Convertit une saisie bar/mbar en bar. Retourne None si la valeur n'est pas exploitable."""
+    if value is None or isinstance(value, dict):
+        return None
+    text = str(value).lower().replace(",", ".").strip()
+    m = re.search(r"(-?\d+(?:\.\d+)?)\s*(mbar|bar)?", text)
+    if not m:
+        return None
+    number = float(m.group(1))
+    unit = (m.group(2) or "bar").lower()
+    return number / 1000.0 if unit == "mbar" else number
+
+
+def contains_any(value, words):
+    if value is None:
+        return False
+    text = str(value).lower()
+    return any(w in text for w in words)
+
+
+def live_diagnostic(data):
+    """Lecture provisoire : sépare symptôme, preuve, hypothèse et prochain test."""
+    d = data.get("current_device", {})
+    lines = []
+
+    vanne_amont = d.get("vanne_amont")
+    vanne_aval = d.get("vanne_aval")
+    essais = d.get("essais")
+    clapets = d.get("clapets")
+
+    p1 = parse_pressure_bar(d.get("pression_amont"))
+    p2 = parse_pressure_bar(d.get("pression_zone"))
+    p3 = parse_pressure_bar(d.get("pression_aval"))
+    dp = parse_pressure_bar(d.get("differentiel"))
+    if dp is None and p1 is not None and p2 is not None:
+        dp = p1 - p2
+
+    aval_leaks = contains_any(vanne_aval, ["laisse passer", "non étanche", "fuite"])
+    amont_leaks = contains_any(vanne_amont, ["laisse passer", "non étanche", "fuite"])
+    discharge_leak = contains_any(essais, ["décharge", "decharge", "fuite", "coule", "écoulement", "ecoulement", "pisse"])
+    pressure_rises = contains_any(essais, ["remonte", "remontée", "remontee", "réalimente", "realimente"])
+    clapet_anomaly = contains_any(clapets, ["anomalie", "fuite", "défaut", "defaut"])
+
+    if aval_leaks:
+        lines.append(
+            "🔴 La VANNE AVAL extérieure laisse passer. C'est un défaut réel de la vanne d'isolement, "
+            "mais cela ne prouve PAS que le clapet aval interne du disconnecteur est HS."
+        )
+        lines.append(
+            "➡️ Conséquence : l'aval n'est pas correctement isolé ; certains essais peuvent être faussés. "
+            "Il faut distinguer la vanne extérieure du clapet interne."
+        )
+
+    if amont_leaks:
+        lines.append(
+            "🔴 La VANNE AMONT extérieure laisse passer. Tant que l'amont n'est pas isolé correctement, "
+            "les essais d'étanchéité internes peuvent être difficiles à interpréter."
+        )
+
+    if is_sferaco_ba574(data) and dp is not None:
+        mbar = round(dp * 1000)
+        if dp < 0.14:
+            lines.append(
+                f"🔴 Différentiel P1-P2 = {mbar} mbar : inférieur aux 140 mbar utilisés pour ce BA574 identifié. "
+                "La mise à décharge peut donc être cohérente avec la fonction de sécurité."
+            )
+            lines.append(
+                "➡️ Mais on ne connaît pas encore la cause : P2 peut être trop haute, P1 trop basse, "
+                "un clapet peut fuir, une pression aval peut influencer le système, ou la décharge elle-même peut être en défaut."
+            )
+        else:
+            lines.append(
+                f"🟢 Différentiel P1-P2 = {mbar} mbar : supérieur ou égal à 140 mbar pour ce BA574 identifié. "
+                "Une fuite permanente à la décharge demanderait alors de chercher une autre cause au lieu d'accuser automatiquement un clapet."
+            )
+
+    if discharge_leak:
+        lines.append(
+            "💧 Une fuite à la décharge est un SYMPTÔME, pas un diagnostic. "
+            "À elle seule, elle ne permet pas de conclure « vanne aval » ou « clapet aval »."
+        )
+        lines.append(
+            "🧠 Ordre logique : 1) vérifier les vannes d'isolement, 2) relever P1/P2/P3, "
+            "3) mesurer P1-P2, 4) voir de quel côté une pression revient après isolement, "
+            "5) seulement ensuite désigner l'organe probable."
+        )
+
+    if p3 is not None and p2 is not None and p3 > p2:
+        lines.append(
+            "🔵 P3 est supérieure à P2. Il existe une pression aval capable de solliciter le clapet aval interne. "
+            "Ce chiffre seul ne prouve pas sa fuite : il faut vérifier s'il y a réellement transfert de pression de P3 vers P2."
+        )
+
+    if pressure_rises:
+        lines.append(
+            "🔎 Tu as signalé une remontée de pression. La prochaine question est : DE QUEL CÔTÉ vient-elle ? "
+            "Si elle réapparaît derrière une vanne extérieure fermée, cette vanne laisse passer. "
+            "Si, vannes correctement isolées, une pression aval se transmet vers la zone P2, le clapet aval interne devient suspect."
+        )
+
+    if clapet_anomaly and not lines:
+        lines.append(
+            "🟡 Anomalie sur clapet/décharge notée. On ne remplace rien sur cette seule observation : "
+            "on confirme avec les pressions et l'essai d'isolement."
+        )
+
+    if not lines and any(v is not None for v in (p1, p2, p3, dp)):
+        lines.append(
+            "🔵 Mesures enregistrées. Pour l'instant, Discobot ne force aucun diagnostic : "
+            "il attend la corrélation entre pressions, isolement des vannes et comportement de la décharge."
+        )
+
+    return "\n\n".join(lines)
+
+
 def guided_prompt(session, key, base_prompt):
     data = session["data"]
     ident = device_identity(data)
@@ -343,8 +458,13 @@ def guided_prompt(session, key, base_prompt):
             "Décris seulement ce qui se passe réellement : « décharge s'ouvre », « fuite continue », « pas de fuite », etc."
         ),
         "diagnostic": (
-            "🧠 Discobot doit maintenant raisonner à partir de ce que tu as mesuré. "
-            "Écris l'anomalie constatée si elle n'est pas déjà évidente. Ne démonte pas un organe uniquement sur une supposition."
+            "🧠 DIAGNOSTIC GUIDÉ — on ne part jamais de « ça coule donc c'est X ».\n"
+            "Discobot sépare toujours : SYMPTÔME → MESURE → ISOLEMENT → NOUVELLE MESURE → CAUSE PROBABLE.\n\n"
+            + (live_diagnostic(data) or
+               "Aucune conclusion certaine pour le moment. Décris ce qui se passe réellement pendant l'essai.")
+            + "\n\n"
+            "👉 Si le défaut n'est pas isolé avec certitude, écris « à confirmer ». "
+            "Ne démonte ni ne remplace un clapet uniquement sur une supposition."
         ),
         "recommandation": (
             "🔧 Choisis la suite la plus simple correspondant au diagnostic : aucune action, surveillance, nettoyage, réparation ciblée, kit interne ou remplacement. "
@@ -807,9 +927,20 @@ async def complete_current_device(session, chat_id, context):
 
 async def advance(session, chat_id, value, context):
     idx = session["current_step"]
+    answered_key, _, _, _ = get_step(idx)
     save_current_value(session, value)
     session["current_step"] = next_missing_step(session, idx + 1)
     save_session(session)
+
+    # Après les étapes qui changent réellement le diagnostic, Discobot explique
+    # ce que l'observation prouve — et surtout ce qu'elle ne prouve pas.
+    if answered_key in {"vanne_amont", "vanne_aval", "differentiel", "essais"}:
+        note = live_diagnostic(session["data"])
+        if note:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="🧠 LECTURE PROVISOIRE\n\n" + note,
+            )
 
     if session["current_step"] >= len(ALL_STEPS):
         await complete_current_device(session, chat_id, context)
@@ -824,7 +955,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.4 — guide terrain intelligent\n\n"
+        "👋 Discobot Aqualeo V0.5 — diagnostic guidé intelligent\n\n"
         "1er passage : contrôle + diagnostic.\n"
         "2e passage : intervention uniquement si nécessaire.\n\n"
         "Prix : aucune estimation fournisseur inventée. "
