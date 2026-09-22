@@ -551,6 +551,10 @@ def build_summary(data):
         f"Client : {value_text(site.get('client', '—'))}",
         f"Site : {value_text(site.get('site', '—'))}",
         f"Adresse : {value_text(site.get('adresse', '—'))}",
+        f"Contact : {value_text(site.get('contact_nom', '—'))}",
+        f"Fonction : {value_text(site.get('contact_fonction', '—'))}",
+        f"E-mail : {value_text(site.get('contact_email', '—'))}",
+        f"Téléphone : {value_text(site.get('contact_tel', '—'))}",
         f"Nombre d'appareils annoncé : {value_text(site.get('nombre_appareils', '—'))}",
         "",
     ]
@@ -590,7 +594,8 @@ async def complete_current_device(session, chat_id, context):
     if data["device_index"] < total_devices(data):
         data["device_index"] += 1
         data["current_device"] = {}
-        session["current_step"] = len(SITE_STEPS)
+        prepare_device_prefill(data)
+        session["current_step"] = next_missing_step(session, len(SITE_STEPS))
         save_session(session)
         await context.bot.send_message(
             chat_id=chat_id,
@@ -632,7 +637,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.2\n\n"
+        "👋 Discobot Aqualeo V0.3 — mode intelligent\n\n"
         "1er passage : contrôle + diagnostic.\n"
         "2e passage : intervention uniquement si nécessaire.\n\n"
         "Prix : aucune estimation fournisseur inventée. "
