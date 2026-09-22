@@ -40,7 +40,14 @@ SMTP_USER = os.environ.get("SMTP_USER", "").strip()
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
 SMTP_FROM = os.environ.get("SMTP_FROM", SMTP_USER).strip()
 COMPANY_EMAIL = os.environ.get("COMPANY_EMAIL", "plombier88idf@gmail.com").strip()
-CONTROL_PRICE_HT = os.environ.get("CONTROL_PRICE_HT", "").strip()
+# Facturation : aucun taux économique n'est inventé. Ils doivent être configurés.
+BILLING_LABOR_COST_HT_HOUR = os.environ.get("BILLING_LABOR_COST_HT_HOUR", "").strip()
+BILLING_TRAVEL_COST_HT_HOUR = os.environ.get("BILLING_TRAVEL_COST_HT_HOUR", "").strip()
+BILLING_VEHICLE_COST_KM = os.environ.get("BILLING_VEHICLE_COST_KM", "").strip()
+BILLING_SOCIAL_RATE_PCT = os.environ.get("BILLING_SOCIAL_RATE_PCT", "").strip()
+BILLING_OVERHEAD_RATE_PCT = os.environ.get("BILLING_OVERHEAD_RATE_PCT", "").strip()
+BILLING_MARGIN_RATE_PCT = os.environ.get("BILLING_MARGIN_RATE_PCT", "").strip()
+BILLING_MINIMUM_HT = os.environ.get("BILLING_MINIMUM_HT", "").strip()
 VAT_RATE = float(os.environ.get("VAT_RATE", "20") or "20")
 COMPANY_NAME = os.environ.get("COMPANY_NAME", "Plomberie Aqualeo").strip()
 COMPANY_PHONE = os.environ.get("COMPANY_PHONE", "06 13 14 20 90").strip()
@@ -152,6 +159,30 @@ def connect_db():
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(control_id, mode)
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS billing_inputs (
+            control_id INTEGER PRIMARY KEY,
+            travel_minutes REAL NOT NULL,
+            work_minutes REAL NOT NULL,
+            km REAL NOT NULL,
+            tolls REAL NOT NULL DEFAULT 0,
+            parking REAL NOT NULL DEFAULT 0,
+            consumables REAL NOT NULL DEFAULT 0,
+            other_expenses REAL NOT NULL DEFAULT 0,
+            raw_text TEXT,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pending_billing_input (
+            user_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            control_id INTEGER NOT NULL,
+            requested_action TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(user_id, chat_id)
         )
     """)
     ensure_pricing_tables(con)
@@ -1274,13 +1305,251 @@ def report_pdf(control):
     return buf
 
 
-def invoice_pdf(control):
-    if not CONTROL_PRICE_HT:
-        return None, "Tarif du contrôle non configuré (CONTROL_PRICE_HT)."
+def _cfg_float(name, raw):
+    if raw is None or str(raw).strip() == "":
+        return None
     try:
-        ht = float(CONTROL_PRICE_HT.replace(",", "."))
+        return float(str(raw).replace(",", "."))
     except Exception:
-        return None, "Tarif du contrôle invalide."
+        return None
+
+
+def billing_config():
+    return {
+        "labor_cost_hour": _cfg_float("BILLING_LABOR_COST_HT_HOUR", BILLING_LABOR_COST_HT_HOUR),
+        "travel_cost_hour": _cfg_float("BILLING_TRAVEL_COST_HT_HOUR", BILLING_TRAVEL_COST_HT_HOUR),
+        "vehicle_cost_km": _cfg_float("BILLING_VEHICLE_COST_KM", BILLING_VEHICLE_COST_KM),
+        "social_rate": _cfg_float("BILLING_SOCIAL_RATE_PCT", BILLING_SOCIAL_RATE_PCT),
+        "overhead_rate": _cfg_float("BILLING_OVERHEAD_RATE_PCT", BILLING_OVERHEAD_RATE_PCT),
+        "margin_rate": _cfg_float("BILLING_MARGIN_RATE_PCT", BILLING_MARGIN_RATE_PCT),
+        "minimum_ht": _cfg_float("BILLING_MINIMUM_HT", BILLING_MINIMUM_HT),
+    }
+
+
+def missing_billing_config():
+    cfg = billing_config()
+    required = {
+        "labor_cost_hour": "valeur horaire du temps de travail",
+        "travel_cost_hour": "valeur horaire du temps de trajet",
+        "vehicle_cost_km": "coût véhicule au km",
+        "social_rate": "taux charges/cotisations",
+        "overhead_rate": "taux frais généraux",
+        "margin_rate": "marge cible",
+    }
+    return [label for key, label in required.items() if cfg.get(key) is None]
+
+
+def save_billing_inputs(control_id, values, raw_text=""):
+    con = connect_db()
+    con.execute("""
+        INSERT INTO billing_inputs(
+            control_id, travel_minutes, work_minutes, km, tolls, parking,
+            consumables, other_expenses, raw_text, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(control_id)
+        DO UPDATE SET
+            travel_minutes=excluded.travel_minutes,
+            work_minutes=excluded.work_minutes,
+            km=excluded.km,
+            tolls=excluded.tolls,
+            parking=excluded.parking,
+            consumables=excluded.consumables,
+            other_expenses=excluded.other_expenses,
+            raw_text=excluded.raw_text,
+            updated_at=excluded.updated_at
+    """, (
+        int(control_id),
+        float(values["travel_minutes"]),
+        float(values["work_minutes"]),
+        float(values["km"]),
+        float(values.get("tolls", 0)),
+        float(values.get("parking", 0)),
+        float(values.get("consumables", 0)),
+        float(values.get("other_expenses", 0)),
+        raw_text,
+        now_iso(),
+    ))
+    con.commit()
+    con.close()
+
+
+def load_billing_inputs(control_id):
+    con = connect_db()
+    row = con.execute("""
+        SELECT travel_minutes, work_minutes, km, tolls, parking,
+               consumables, other_expenses, raw_text, updated_at
+        FROM billing_inputs WHERE control_id=?
+    """, (int(control_id),)).fetchone()
+    con.close()
+    if not row:
+        return None
+    return {
+        "travel_minutes": row[0],
+        "work_minutes": row[1],
+        "km": row[2],
+        "tolls": row[3],
+        "parking": row[4],
+        "consumables": row[5],
+        "other_expenses": row[6],
+        "raw_text": row[7],
+        "updated_at": row[8],
+    }
+
+
+def set_pending_billing(user_id, chat_id, control_id, requested_action):
+    con = connect_db()
+    con.execute("""
+        INSERT INTO pending_billing_input(user_id, chat_id, control_id, requested_action, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, chat_id)
+        DO UPDATE SET
+            control_id=excluded.control_id,
+            requested_action=excluded.requested_action,
+            created_at=excluded.created_at
+    """, (int(user_id), int(chat_id), int(control_id), requested_action, now_iso()))
+    con.commit()
+    con.close()
+
+
+def get_pending_billing(user_id, chat_id):
+    con = connect_db()
+    row = con.execute("""
+        SELECT control_id, requested_action
+        FROM pending_billing_input
+        WHERE user_id=? AND chat_id=?
+    """, (int(user_id), int(chat_id))).fetchone()
+    con.close()
+    if not row:
+        return None
+    return {"control_id": row[0], "requested_action": row[1]}
+
+
+def clear_pending_billing(user_id, chat_id):
+    con = connect_db()
+    con.execute(
+        "DELETE FROM pending_billing_input WHERE user_id=? AND chat_id=?",
+        (int(user_id), int(chat_id))
+    )
+    con.commit()
+    con.close()
+
+
+def _duration_to_minutes(raw):
+    raw = str(raw).lower().strip().replace(",", ".")
+    h = re.search(r"(\d+(?:\.\d+)?)\s*h", raw)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:min|mn)", raw)
+    if h or m:
+        return (float(h.group(1)) * 60 if h else 0) + (float(m.group(1)) if m else 0)
+    n = re.search(r"(\d+(?:\.\d+)?)", raw)
+    return float(n.group(1)) if n else None
+
+
+def parse_billing_text(text):
+    """Ex: trajet 1h10, travail 2h, 72 km, péage 8, parking 5, consommables 3."""
+    t = (text or "").lower().replace("€", " ").replace(",", ".")
+    result = {}
+
+    def segment(patterns):
+        positions = []
+        for p in patterns:
+            m = re.search(p, t, re.IGNORECASE)
+            if m:
+                positions.append((m.start(), m.end(), m.group(1)))
+        return min(positions, default=None)
+
+    # Durées : capture jusqu'à la virgule/point-virgule ou prochain label.
+    mt = re.search(r"(?:trajet|deplacement|déplacement|route)\s*[:=]?\s*([^;\n,]+)", t, re.IGNORECASE)
+    mw = re.search(r"(?:travail|sur place|intervention)\s*[:=]?\s*([^;\n,]+)", t, re.IGNORECASE)
+    if mt:
+        result["travel_minutes"] = _duration_to_minutes(mt.group(1))
+    if mw:
+        result["work_minutes"] = _duration_to_minutes(mw.group(1))
+
+    mk = re.search(r"(\d+(?:\.\d+)?)\s*km\b", t, re.IGNORECASE)
+    if mk:
+        result["km"] = float(mk.group(1))
+
+    money_patterns = {
+        "tolls": r"(?:peage|péage)s?\s*[:=]?\s*(\d+(?:\.\d+)?)",
+        "parking": r"parking\s*[:=]?\s*(\d+(?:\.\d+)?)",
+        "consumables": r"(?:consommables?|petit materiel|petit matériel)\s*[:=]?\s*(\d+(?:\.\d+)?)",
+        "other_expenses": r"(?:autres? frais|divers)\s*[:=]?\s*(\d+(?:\.\d+)?)",
+    }
+    for key, pat in money_patterns.items():
+        m = re.search(pat, t, re.IGNORECASE)
+        result[key] = float(m.group(1)) if m else 0.0
+
+    required = ["travel_minutes", "work_minutes", "km"]
+    if any(result.get(k) is None for k in required):
+        return None
+    return result
+
+
+def calculate_control_price(control_id):
+    inputs = load_billing_inputs(control_id)
+    if not inputs:
+        return None, "Données de temps/déplacement manquantes."
+    missing = missing_billing_config()
+    if missing:
+        return None, "Paramètres économiques manquants : " + ", ".join(missing) + "."
+
+    cfg = billing_config()
+    social = cfg["social_rate"] / 100.0
+    overhead = cfg["overhead_rate"] / 100.0
+    margin = cfg["margin_rate"] / 100.0
+    if social < 0 or overhead < 0 or margin < 0 or social + overhead >= 0.95 or margin >= 0.95:
+        return None, "Taux économiques incohérents : vérifie charges, frais généraux et marge."
+
+    work_cost = inputs["work_minutes"] / 60.0 * cfg["labor_cost_hour"]
+    travel_time_cost = inputs["travel_minutes"] / 60.0 * cfg["travel_cost_hour"]
+    vehicle_cost = inputs["km"] * cfg["vehicle_cost_km"]
+    cash_expenses = inputs["tolls"] + inputs["parking"] + inputs["consumables"] + inputs["other_expenses"]
+
+    direct_cost = work_cost + travel_time_cost + vehicle_cost + cash_expenses
+    revenue_to_cover_charges = direct_cost / (1.0 - social - overhead)
+    sell_ht = revenue_to_cover_charges / (1.0 - margin)
+    if cfg.get("minimum_ht") is not None:
+        sell_ht = max(sell_ht, cfg["minimum_ht"])
+
+    return {
+        "work_cost": round(work_cost, 2),
+        "travel_time_cost": round(travel_time_cost, 2),
+        "vehicle_cost": round(vehicle_cost, 2),
+        "cash_expenses": round(cash_expenses, 2),
+        "direct_cost": round(direct_cost, 2),
+        "sell_ht": round(sell_ht, 2),
+        "travel_minutes": inputs["travel_minutes"],
+        "work_minutes": inputs["work_minutes"],
+        "km": inputs["km"],
+        "tolls": inputs["tolls"],
+        "parking": inputs["parking"],
+        "consumables": inputs["consumables"],
+        "other_expenses": inputs["other_expenses"],
+    }, None
+
+
+def billing_internal_summary(control_id):
+    calc, err = calculate_control_price(control_id)
+    if err:
+        return "💰 Calcul de facturation bloqué : " + err
+    return (
+        "💰 CALCUL INTERNE — non imprimé tel quel sur la facture\n"
+        f"• Travail : {calc['work_minutes']:.0f} min → coût interne {calc['work_cost']:.2f} €\n"
+        f"• Trajet AR : {calc['travel_minutes']:.0f} min → coût interne {calc['travel_time_cost']:.2f} €\n"
+        f"• Véhicule : {calc['km']:.1f} km → {calc['vehicle_cost']:.2f} €\n"
+        f"• Péages/parking/consommables/autres : {calc['cash_expenses']:.2f} €\n"
+        f"• Coût direct : {calc['direct_cost']:.2f} €\n"
+        f"• Prix calculé à facturer : {calc['sell_ht']:.2f} € HT\n"
+        "Les charges, frais généraux et la marge sont intégrés au calcul interne, pas affichés comme lignes client."
+    )
+
+
+def invoice_pdf(control):
+    calc, err = calculate_control_price(control["id"])
+    if err:
+        return None, err
+
+    ht = calc["sell_ht"]
     tva = round(ht * VAT_RATE / 100.0, 2)
     ttc = round(ht + tva, 2)
     data = control["data"]
@@ -1295,10 +1564,14 @@ def invoice_pdf(control):
         f"Site : {site.get('site','—')}",
         f"Adresse : {site.get('adresse','—')}",
         "",
-        f"Contrôle / diagnostic disconnecteur(s) BA : {ht:.2f} € HT",
+        f"Contrôle / diagnostic disconnecteur(s) BA — temps de travail et déplacement inclus : {ht:.2f} € HT",
         f"TVA {VAT_RATE:.1f}% : {tva:.2f} €",
         f"TOTAL TTC : {ttc:.2f} €",
         "",
+        f"Déplacement pris en compte : {calc['travel_minutes']:.0f} min AR / {calc['km']:.1f} km.",
+        f"Frais réels pris en compte dans le prix : péages {calc['tolls']:.2f} €, parking {calc['parking']:.2f} €, consommables {calc['consumables']:.2f} €, autres {calc['other_expenses']:.2f} €.",
+        "",
+        "Les charges internes et la marge ne sont pas détaillées sur la facture client.",
         "Document généré à partir du contrôle archivé. À valider avant envoi."
     ]
     buf = pdf_from_lines("Facture contrôle — Aqualeo", lines)
@@ -1463,7 +1736,10 @@ def package_keyboard(control_id, include_quote=False, mode="basic"):
             InlineKeyboardButton("✅ Réponse reçue / accepté", callback_data=f"post:quote_accept:{control_id}"),
             InlineKeyboardButton("❌ Refusé", callback_data=f"post:quote_refuse:{control_id}"),
         ])
-    buttons.append([InlineKeyboardButton("📌 Voir suivi", callback_data=f"post:tracking:{control_id}")])
+    buttons.append([
+        InlineKeyboardButton("💰 Voir calcul interne", callback_data=f"post:billing:{control_id}"),
+        InlineKeyboardButton("📌 Voir suivi", callback_data=f"post:tracking:{control_id}"),
+    ])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -1568,7 +1844,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.10 — clôture + suivi devis\n\n"
+        "👋 Discobot Aqualeo V0.11 — facturation rentable\n\n"
         "1er passage : contrôle + diagnostic.\n"
         "2e passage : intervention uniquement si nécessaire.\n\n"
         "Prix : aucune estimation fournisseur inventée. "
@@ -1786,6 +2062,25 @@ async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text("Accès non autorisé.")
         return
 
+    pending_billing = get_pending_billing(user_id, chat_id)
+    if pending_billing and update.effective_message.text:
+        raw = (update.effective_message.text or "").strip()
+        values = parse_billing_text(raw)
+        if not values:
+            await update.effective_message.reply_text(
+                "Je n'ai pas réussi à lire les 3 données obligatoires : trajet AR, temps de travail et kilomètres.\n"
+                "Exemple : « trajet 1h10, travail 2h, 72 km, péage 8, parking 5, consommables 3 »."
+            )
+            return
+        save_billing_inputs(pending_billing["control_id"], values, raw)
+        clear_pending_billing(user_id, chat_id)
+        await update.effective_message.reply_text(
+            "✅ Temps, kilomètres et frais enregistrés.\n\n"
+            + billing_internal_summary(pending_billing["control_id"])
+            + "\n\nReclique maintenant sur l'option de clôture voulue."
+        )
+        return
+
     session = get_session(user_id, chat_id)
     if not session:
         await update.effective_message.reply_text("Aucun contrôle en cours. Utilise /nouveau.")
@@ -1962,6 +2257,17 @@ async def callback_post_control(update: Update, context: ContextTypes.DEFAULT_TY
     site = data.get("site", {})
     client_email = str(site.get("contact_email") or "").strip()
 
+    async def require_billing(action_name):
+        if load_billing_inputs(control_id):
+            return True
+        set_pending_billing(query.from_user.id, query.message.chat.id, control_id, action_name)
+        await query.message.reply_text(
+            "💰 Avant de générer la facture, donne-moi les coûts réels en UNE phrase.\n\n"
+            "Exemple : « trajet 1h10, travail 2h, 72 km, péage 8€, parking 5€, consommables 3€, autres frais 0€ ».\n\n"
+            "Trajet = aller + retour. Le calcul intégrera ensuite charges, frais généraux et marge configurés."
+        )
+        return False
+
     async def send_pack_to_telegram(include_quote=False, mode="basic"):
         report = report_pdf(control)
         invoice, inv_err = invoice_pdf(control)
@@ -1991,16 +2297,22 @@ async def callback_post_control(update: Update, context: ContextTypes.DEFAULT_TY
         return True
 
     if action == "pack_basic":
+        if not await require_billing(action):
+            return
         save_post_workflow(control_id, "basic", "RAPPORT_FACTURE_PREPARES", client_email or None)
         await send_pack_to_telegram(include_quote=False, mode="basic")
         return
 
     if action == "pack_immediate":
+        if not await require_billing(action):
+            return
         save_post_workflow(control_id, "immediate", "DEVIS_A_FAIRE_ACCEPTER_SUR_PLACE", client_email or None)
         await send_pack_to_telegram(include_quote=True, mode="immediate")
         return
 
     if action == "pack_delayed":
+        if not await require_billing(action):
+            return
         due = (datetime.now(timezone.utc) + timedelta(days=QUOTE_FOLLOWUP_DAYS)).isoformat(timespec="seconds")
         save_post_workflow(
             control_id, "delayed", "DEVIS_EN_ATTENTE_DE_REPONSE",
@@ -2011,6 +2323,10 @@ async def callback_post_control(update: Update, context: ContextTypes.DEFAULT_TY
             await query.message.reply_text(
                 f"⏳ Dossier marqué en attente. Relance cible enregistrée à J+{QUOTE_FOLLOWUP_DAYS}."
             )
+        return
+
+    if action == "billing":
+        await query.message.reply_text(billing_internal_summary(control_id))
         return
 
     if action == "tracking":
@@ -2034,6 +2350,8 @@ async def callback_post_control(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if action.startswith("sendpack_"):
+        if not await require_billing(action):
+            return
         mode = action.replace("sendpack_", "")
         if not client_email:
             await query.message.reply_text(
