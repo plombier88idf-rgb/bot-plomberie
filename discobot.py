@@ -767,19 +767,56 @@ async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     idx = session["current_step"]
-    _, _, kind, _ = get_step(idx)
+    if idx >= len(ALL_STEPS):
+        await update.effective_message.reply_text("Ce contrôle est terminé. Utilise /nouveau pour un autre dossier.")
+        return
 
+    key, _, kind, _ = get_step(idx)
+    msg = update.effective_message
+
+    # Une photo peut être envoyée dès la création du dossier, même si l'étape attend du texte.
+    if msg.photo and kind != "photo":
+        photo = msg.photo[-1]
+        session["data"].setdefault("source_photos", []).append({
+            "photo_file_id": photo.file_id,
+            "file_unique_id": photo.file_unique_id,
+            "width": photo.width,
+            "height": photo.height,
+            "usage": "DOSSIER_SOURCE",
+        })
+        await msg.reply_text("🔎 J'analyse la photo et je préremplis le dossier…")
+        extracted = await extract_from_message(update, context, include_photo=True)
+        if extraction_has_data(extracted):
+            apply_extraction(session, extracted)
+            session["current_step"] = next_missing_step(session, 0)
+            save_session(session)
+            await msg.reply_text(build_intake_preview(session["data"]))
+            if session["current_step"] < len(ALL_STEPS):
+                await send_step(chat_id, session, context)
+        else:
+            save_session(session)
+            if AI_CLIENT is None:
+                await msg.reply_text(
+                    "📷 Photo enregistrée, mais l'analyse intelligente des photos n'est pas activée "
+                    "(variable OPENAI_API_KEY manquante). Je poursuis sans inventer son contenu."
+                )
+            else:
+                await msg.reply_text(
+                    "📷 Photo enregistrée, mais je n'ai pas pu en extraire d'information certaine. "
+                    "Je poursuis sans rien inventer."
+                )
+            await send_step(chat_id, session, context)
+        return
+
+    # Pendant le contrôle, la photo est archivée et peut aussi préremplir marque / modèle / DN / série.
     if kind == "photo":
-        if not update.effective_message.photo:
-            await update.effective_message.reply_text(
-                "J'attends une photo. Sinon utilise Passer / Impossible / Non vérifiable."
-            )
+        if not msg.photo:
+            await msg.reply_text("J'attends une photo. Sinon utilise Passer / Impossible / Non vérifiable.")
             return
 
-        photo = update.effective_message.photo[-1]
-        await advance(
+        photo = msg.photo[-1]
+        save_current_value(
             session,
-            chat_id,
             {
                 "photo_file_id": photo.file_id,
                 "file_unique_id": photo.file_unique_id,
@@ -787,18 +824,56 @@ async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "height": photo.height,
                 "archive_status": "A_TELECHARGER_DANS_DOSSIER_APPAREIL",
             },
-            context,
         )
+
+        extracted = await extract_from_message(update, context, include_photo=True)
+        if extraction_has_data(extracted) and extracted.get("devices"):
+            valid_device_keys = {x[0] for x in DEVICE_STEPS}
+            for k, v in extracted["devices"][0].items():
+                if clean_value(v) is not None and k in valid_device_keys:
+                    session["data"].setdefault("current_device", {})[k] = clean_value(v)
+
+        session["current_step"] = next_missing_step(session, idx + 1)
+        save_session(session)
+        if session["current_step"] >= len(ALL_STEPS):
+            await complete_current_device(session, chat_id, context)
+        else:
+            await send_step(chat_id, session, context)
         return
 
-    text = (update.effective_message.text or "").strip()
+    text = (msg.text or "").strip()
     if not text:
-        await update.effective_message.reply_text(
-            "J'attends une réponse texte, ou utilise un bouton de statut."
-        )
+        await msg.reply_text("J'attends une réponse texte, ou utilise un bouton de statut.")
         return
 
-    await advance(session, chat_id, text, context)
+    # Une phrase peut contenir plusieurs informations : Discobot les répartit dans les bons champs.
+    extracted = await extract_from_message(update, context, include_photo=False)
+    apply_extraction(session, extracted)
+
+    if idx < len(SITE_STEPS):
+        bucket = session["data"].setdefault("site", {})
+    else:
+        bucket = session["data"].setdefault("current_device", {})
+        if extracted and extracted.get("devices"):
+            valid_device_keys = {x[0] for x in DEVICE_STEPS}
+            for k, v in extracted["devices"][0].items():
+                if clean_value(v) is not None and k in valid_device_keys:
+                    bucket[k] = clean_value(v)
+
+    # Si l'analyse n'a pas alimenté le champ attendu, la réponse reste la valeur de ce champ.
+    if not has_answer(bucket.get(key)):
+        bucket[key] = text
+
+    session["current_step"] = next_missing_step(session, idx + 1)
+    save_session(session)
+
+    if extraction_has_data(extracted) and idx < len(SITE_STEPS):
+        await msg.reply_text(build_intake_preview(session["data"]))
+
+    if session["current_step"] >= len(ALL_STEPS):
+        await complete_current_device(session, chat_id, context)
+    else:
+        await send_step(chat_id, session, context)
 
 
 async def post_init(application):
