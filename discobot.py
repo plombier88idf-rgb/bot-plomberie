@@ -510,67 +510,126 @@ def live_diagnostic(data):
     return "\n\n".join(lines)
 
 
+def component_anomaly(value):
+    if value is None or isinstance(value, dict):
+        return False
+    return contains_any(value, ["anomalie", "défaut", "defaut", "non étanche", "non etanche", "laisse passer"])
+
+
+def component_non_verifiable(value):
+    return isinstance(value, dict) and value.get("status") in {"non_verifiable", "impossible"}
+
+
 def auto_diagnosis(data):
+    """Conclusion calculée à partir des essais réellement enregistrés."""
     d = data.get("current_device", {})
-    issues = []
+    confirmed = []
     uncertain = []
+    good = []
 
     if valve_leaks(d.get("vanne_amont")):
-        issues.append("Vanne amont extérieure non étanche au contrôle.")
-    if valve_leaks(d.get("vanne_aval")):
-        issues.append("Vanne aval extérieure non étanche au contrôle.")
+        confirmed.append("vanne d'arrêt amont extérieure non étanche")
+    elif has_answer(d.get("vanne_amont")) and not component_non_verifiable(d.get("vanne_amont")):
+        good.append("vanne amont étanche")
 
-    leak = positive_leak(d.get("essais"))
-    pressure_rises = contains_any(d.get("essais"), ["remonte", "remontée", "remontee", "réalimente", "realimente"])
-    dp = parse_pressure_bar(d.get("differentiel"), differential=True)
+    if component_anomaly(d.get("clapet_amont")):
+        confirmed.append("anomalie du clapet amont constatée pendant son essai dédié")
+    elif has_answer(d.get("clapet_amont")) and not component_non_verifiable(d.get("clapet_amont")):
+        good.append("clapet amont RAS")
+
+    if component_anomaly(d.get("soupape_decharge")):
+        confirmed.append("anomalie de fonctionnement de la soupape / décharge constatée pendant son essai dédié")
+    elif has_answer(d.get("soupape_decharge")) and not component_non_verifiable(d.get("soupape_decharge")):
+        good.append("soupape / décharge RAS")
+
+    if valve_leaks(d.get("vanne_aval")):
+        confirmed.append("vanne d'arrêt aval extérieure non étanche")
+    elif has_answer(d.get("vanne_aval")) and not component_non_verifiable(d.get("vanne_aval")):
+        good.append("vanne aval étanche")
+
+    if component_anomaly(d.get("clapet_aval")):
+        confirmed.append("anomalie du clapet aval constatée pendant son essai dédié")
+    elif has_answer(d.get("clapet_aval")) and not component_non_verifiable(d.get("clapet_aval")):
+        good.append("clapet aval RAS")
+
     p1 = parse_pressure_bar(d.get("pression_amont"))
     p2 = parse_pressure_bar(d.get("pression_zone"))
+    p3 = parse_pressure_bar(d.get("pression_aval"))
+    dp = parse_pressure_bar(d.get("differentiel"), differential=True)
     if dp is None and p1 is not None and p2 is not None:
         dp = p1 - p2
 
-    if leak:
-        if is_sferaco_ba574(data) and dp is not None and dp < 0.14:
-            uncertain.append(
-                f"Écoulement persistant à la décharge avec P1-P2 ≈ {round(dp*1000)} mbar. "
-                "Anomalie confirmée, mais l'organe interne responsable n'est pas encore isolé."
-            )
+    if is_sferaco_ba574(data) and dp is not None:
+        if dp < 0.14:
+            confirmed.append(f"différentiel d'ouverture mesuré à {round(dp*1000)} mbar, inférieur au critère de 140 mbar chargé pour ce modèle")
         else:
-            uncertain.append(
-                "Écoulement persistant à la décharge confirmé. Cause interne non attribuée tant que l'essai d'isolement ne désigne pas l'organe."
-            )
-    if pressure_rises:
-        uncertain.append("Remontée de pression signalée : provenance à isoler avant de condamner un clapet.")
+            good.append(f"différentiel d'ouverture {round(dp*1000)} mbar")
 
-    clapets = d.get("clapets")
-    if contains_any(clapets, ["anomalie", "défaut", "defaut"]) and not leak:
-        uncertain.append("Anomalie clapet/décharge signalée mais non encore isolée par une mesure.")
-
-    if not issues and not uncertain:
-        return (
-            "Aucune anomalie technique mise en évidence dans les essais enregistrés. "
-            "Les vannes/mesures non vérifiables restent exclues de cette conclusion."
+    # Pour les autres modèles, une valeur seule ne reçoit jamais un seuil inventé.
+    if not is_sferaco_ba574(data) and dp is not None:
+        uncertain.append(
+            f"ΔP relevé à {round(dp*1000)} mbar : valeur archivée, conformité non décidée sans critère constructeur chargé pour ce modèle"
         )
 
-    parts = []
-    if issues:
-        parts.append("Défaut(s) confirmé(s) : " + " ".join(issues))
+    if positive_leak(d.get("essais")) and not component_anomaly(d.get("soupape_decharge")):
+        uncertain.append(
+            "écoulement persistant signalé au bilan alors que l'organe responsable n'est pas isolé par les essais dédiés"
+        )
+
+    unverifiable = []
+    for key, label in [
+        ("vanne_amont","vanne amont"), ("clapet_amont","clapet amont"),
+        ("soupape_decharge","soupape/décharge"), ("vanne_aval","vanne aval"),
+        ("clapet_aval","clapet aval")
+    ]:
+        if component_non_verifiable(d.get(key)):
+            unverifiable.append(label)
+    if unverifiable:
+        uncertain.append("non vérifiable : " + ", ".join(unverifiable))
+
+    if confirmed:
+        result = "DÉFAUT(S) CONFIRMÉ(S) : " + " ; ".join(confirmed) + "."
+        if uncertain:
+            result += " POINT(S) À CONFIRMER : " + " ; ".join(uncertain) + "."
+        return result
+
     if uncertain:
-        parts.append("À confirmer avant devis de pièce interne : " + " ".join(uncertain))
-    return " ".join(parts)
+        return (
+            "Aucun organe n'est condamné automatiquement. "
+            "POINT(S) À CONFIRMER : " + " ; ".join(uncertain) + "."
+        )
+
+    if good:
+        return "Contrôle sans anomalie mise en évidence sur les organes vérifiés : " + " ; ".join(good) + "."
+
+    return "Contrôle incomplet : données insuffisantes pour établir une conclusion technique."
 
 
 def auto_recommendation(data):
     d = data.get("current_device", {})
     actions = []
+
     if valve_leaks(d.get("vanne_amont")):
-        actions.append("prévoir réparation/remplacement de la vanne amont extérieure puis refaire l'essai")
+        actions.append("devis possible pour réparation/remplacement de la vanne amont extérieure")
+    if component_anomaly(d.get("clapet_amont")):
+        actions.append("rechercher la référence exacte du kit/clapet amont et son tarif fournisseur avant devis")
+    if component_anomaly(d.get("soupape_decharge")):
+        actions.append("rechercher la référence exacte du kit/soupape de décharge et son tarif fournisseur avant devis")
     if valve_leaks(d.get("vanne_aval")):
-        actions.append("prévoir réparation/remplacement de la vanne aval extérieure puis refaire l'essai")
-    if positive_leak(d.get("essais")) or contains_any(d.get("essais"), ["remonte", "remontée", "remontee"]):
-        actions.append("ne pas deviser de clapet interne tant que le contrôle complémentaire n'a pas isolé précisément la cause")
+        actions.append("devis possible pour réparation/remplacement de la vanne aval extérieure")
+    if component_anomaly(d.get("clapet_aval")):
+        actions.append("rechercher la référence exacte du kit/clapet aval et son tarif fournisseur avant devis")
+
+    dp = parse_pressure_bar(d.get("differentiel"), differential=True)
+    if is_sferaco_ba574(data) and dp is not None and dp < 0.14:
+        actions.append("contrôle/réparation interne à cibler avant remise en conformité du différentiel")
+
     if not actions:
-        return "Aucune réparation à prévoir sur les éléments contrôlés ; archiver le contrôle."
-    return " ; ".join(actions) + "."
+        if positive_leak(d.get("essais")):
+            return "Contrôle complémentaire nécessaire avant tout devis de pièce : la cause de l'écoulement n'est pas suffisamment isolée."
+        return "Aucune réparation proposée automatiquement sur les éléments contrôlés."
+
+    return " ; ".join(actions) + ". Aucun prix de pièce n'est utilisé sans référence et tarif fournisseur vérifiés."
 
 
 def autofill_diagnosis_and_recommendation(data):
@@ -1074,32 +1133,57 @@ def value_text(value):
 
 def build_summary(data):
     site = data.get("site", {})
+    devices = data.get("devices", [])
     lines = [
-        "✅ 1er PASSAGE TERMINÉ — CONTRÔLE / DIAGNOSTIC",
+        "📄 RAPPORT DE CONTRÔLE — DISCONNECTEUR(S) BA",
         "",
         f"Client : {value_text(site.get('client', '—'))}",
         f"Site : {value_text(site.get('site', '—'))}",
         f"Adresse : {value_text(site.get('adresse', '—'))}",
         f"Contact : {value_text(site.get('contact_nom', '—'))}",
-        f"Fonction : {value_text(site.get('contact_fonction', '—'))}",
-        f"E-mail : {value_text(site.get('contact_email', '—'))}",
-        f"Téléphone : {value_text(site.get('contact_tel', '—'))}",
-        f"Nombre d'appareils annoncé : {value_text(site.get('nombre_appareils', '—'))}",
         "",
     ]
 
-    for n, device in enumerate(data.get("devices", []), start=1):
-        lines.append(f"--- APPAREIL {n}/{len(data.get('devices', []))} ---")
-        for key, label, _, _ in DEVICE_STEPS:
-            lines.append(f"• {label} : {value_text(device.get(key, '—'))}")
-        lines.append("")
+    for n, d in enumerate(devices, start=1):
+        identity = " — ".join(
+            str(d.get(k)).strip() for k in ("marque","modele","type","diametre","serie")
+            if has_answer(d.get(k))
+        ) or "identité incomplète"
+
+        lines.extend([
+            f"━━━━━━━━ APPAREIL {n}/{len(devices)} ━━━━━━━━",
+            f"Emplacement : {value_text(d.get('emplacement','—'))}",
+            f"Identification : {identity}",
+            f"Année / âge déclaré : {value_text(d.get('annee_pose','—'))}",
+            "",
+            "ESSAIS DES ORGANES",
+            f"• Vanne amont : {value_text(d.get('vanne_amont','—'))}",
+            f"• Clapet amont : {value_text(d.get('clapet_amont','—'))}",
+            f"• Soupape / décharge : {value_text(d.get('soupape_decharge','—'))}",
+            f"• Vanne aval : {value_text(d.get('vanne_aval','—'))}",
+            f"• Clapet aval : {value_text(d.get('clapet_aval','—'))}",
+            "",
+            "MESURES",
+            f"• P1 amont : {value_text(d.get('pression_amont','—'))}",
+            f"• P2 zone intermédiaire : {value_text(d.get('pression_zone','—'))}",
+            f"• P3 aval : {value_text(d.get('pression_aval','—'))}",
+            f"• ΔP ouverture décharge : {value_text(d.get('differentiel','—'))}",
+            f"• Bilan essai : {value_text(d.get('essais','—'))}",
+            "",
+            "🧠 DIAGNOSTIC AUTOMATIQUE",
+            value_text(d.get("diagnostic","—")),
+            "",
+            "🔧 SUITE À PRÉVOIR",
+            value_text(d.get("recommandation","—")),
+            "",
+            f"Intervenant : {value_text(d.get('intervenant','—'))}",
+            "",
+        ])
 
     lines.extend([
-        "RÈGLE DEVIS : aucun prix de pièce ne doit être inventé.",
-        "Un devis de réparation/remplacement ne pourra utiliser qu'un prix fournisseur avec source et date de vérification.",
-        "Les tarifs de plus de 31 jours sont considérés à actualiser avant simulation automatique.",
-        "",
-        "Si une intervention est nécessaire : 2e passage = réparation ciblée, kit interne ou remplacement selon diagnostic et comparaison économique.",
+        "RÈGLE DE DEVIS : une pièce interne n'est proposée que si le contrôle l'a isolée avec suffisamment de certitude.",
+        "Référence et tarif fournisseur doivent être vérifiés avant génération d'un devis.",
+        "Aucun e-mail ni devis n'est envoyé automatiquement dans cette version de test.",
     ])
     return "\n".join(lines)
 
@@ -1152,13 +1236,13 @@ async def advance(session, chat_id, value, context):
     answered_key, _, _, _ = get_step(idx)
     save_current_value(session, value)
 
-    if answered_key == "essais":
+    if answered_key in {"vanne_amont", "clapet_amont", "soupape_decharge", "vanne_aval", "clapet_aval", "differentiel", "essais"}:
         autofill_diagnosis_and_recommendation(session["data"])
 
     session["current_step"] = next_missing_step(session, idx + 1)
     save_session(session)
 
-    if answered_key in {"vanne_amont", "vanne_aval", "differentiel", "essais"}:
+    if answered_key in {"vanne_amont", "clapet_amont", "soupape_decharge", "vanne_aval", "clapet_aval", "differentiel", "essais"}:
         note = live_diagnostic(session["data"])
         if note:
             await context.bot.send_message(
@@ -1191,7 +1275,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.7 — protocole pas à pas\n\n"
+        "👋 Discobot Aqualeo V0.8 — protocole + diagnostic auto\n\n"
         "1er passage : contrôle + diagnostic.\n"
         "2e passage : intervention uniquement si nécessaire.\n\n"
         "Prix : aucune estimation fournisseur inventée. "
