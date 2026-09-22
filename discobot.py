@@ -54,16 +54,19 @@ DEVICE_STEPS = [
     ("serie", "N° de série", "text", "Numéro de série ? Écris « illisible » s'il n'est pas lisible."),
     ("diametre", "Diamètre", "text", "Diamètre nominal ? Ex. DN20, DN50, DN80."),
     ("annee_pose", "Année de pose", "text", "Année de pose ou âge estimé de l'appareil ? Si inconnu, indique « inconnu »."),
-    ("vanne_amont", "Vanne amont", "text", "Présence et état de la vanne amont ?"),
-    ("vanne_aval", "Vanne aval", "text", "Présence et état de la vanne aval ?"),
-    ("clapets", "Clapets / décharge", "text", "État visuel des clapets et de la soupape de décharge ?"),
-    ("pression_amont", "Pression amont", "text", "Pression amont réellement mesurée, avec unité ?"),
-    ("pression_zone", "Pression zone intermédiaire", "text", "Pression de la zone intermédiaire réellement mesurée, avec unité ?"),
-    ("pression_aval", "Pression aval", "text", "Pression aval réellement mesurée, avec unité ?"),
-    ("differentiel", "Différentiel", "text", "Différentiel réellement mesuré, avec unité ?"),
-    ("essais", "Essais", "text", "Résultat des essais d'étanchéité / mise à décharge ?"),
-    ("diagnostic", "Diagnostic", "text", "Diagnostic technique : conforme au contrôle, nettoyage, clapet, soupape, joints, kit interne, appareil à remplacer, autre ?"),
-    ("recommandation", "Suite à prévoir", "text", "Suite proposée : aucune / surveillance / réparation ciblée / kit complet / remplacement complet ?"),
+    ("preparation_controle", "Préparation / branchement", "text", "Préparation du contrôle et raccordement de la mallette."),
+    ("vanne_amont", "1 — Vanne amont", "text", "Contrôle d'étanchéité de la vanne d'arrêt amont."),
+    ("clapet_amont", "2 — Clapet amont", "text", "Contrôle du clapet amont."),
+    ("soupape_decharge", "3 — Soupape / décharge", "text", "Contrôle de la soupape de décharge."),
+    ("vanne_aval", "4 — Vanne aval", "text", "Contrôle d'étanchéité de la vanne d'arrêt aval."),
+    ("clapet_aval", "5 — Clapet aval", "text", "Contrôle du clapet aval."),
+    ("pression_amont", "Mesure P1 — Amont", "text", "Pression amont réellement mesurée, avec unité ?"),
+    ("pression_zone", "Mesure P2 — Zone intermédiaire", "text", "Pression de la zone intermédiaire réellement mesurée, avec unité ?"),
+    ("pression_aval", "Mesure P3 — Aval", "text", "Pression aval réellement mesurée, avec unité ?"),
+    ("differentiel", "6 — Différentiel / ouverture décharge", "text", "Différentiel réellement mesuré au déclenchement, avec unité ?"),
+    ("essais", "Bilan essais", "text", "Résultat final des essais et comportement de la décharge ?"),
+    ("diagnostic", "Diagnostic", "text", "Diagnostic calculé par Discobot."),
+    ("recommandation", "Suite à prévoir", "text", "Suite calculée par Discobot."),
     ("intervenant", "Intervenant", "text", "Nom de l'intervenant ?"),
 ]
 
@@ -224,21 +227,26 @@ def status_keyboard():
 
 
 def step_keyboard(key):
+    if key == "preparation_controle":
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Prêt / mallette raccordée", callback_data="result:preparation_controle:ok")],
+            [InlineKeyboardButton("🟡 Non vérifiable", callback_data="result:preparation_controle:nv")],
+        ])
     if key in {"vanne_amont", "vanne_aval"}:
         return InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("🟢 Ferme bien", callback_data=f"result:{key}:ok"),
                 InlineKeyboardButton("🔴 Laisse passer", callback_data=f"result:{key}:leak"),
             ],
-            [InlineKeyboardButton("❔ Non vérifiable", callback_data=f"result:{key}:nv")],
+            [InlineKeyboardButton("🟡 Non vérifiable", callback_data=f"result:{key}:nv")],
         ])
-    if key == "clapets":
+    if key in {"clapet_amont", "soupape_decharge", "clapet_aval"}:
         return InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("🟢 RAS", callback_data="result:clapets:ok"),
-                InlineKeyboardButton("🔴 Anomalie", callback_data="result:clapets:anomaly"),
+                InlineKeyboardButton("🟢 RAS", callback_data=f"result:{key}:ok"),
+                InlineKeyboardButton("🔴 Anomalie", callback_data=f"result:{key}:anomaly"),
             ],
-            [InlineKeyboardButton("❔ Non vérifiable", callback_data="result:clapets:nv")],
+            [InlineKeyboardButton("🟡 Non vérifiable", callback_data=f"result:{key}:nv")],
         ])
     return status_keyboard()
 
@@ -314,6 +322,21 @@ def is_help_request(text):
     return any(x in compact for x in ["comment je fais", "quelle etape", "quelle étape", "tu peux expliquer"])
 
 
+def is_technical_question(text):
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    if "?" in t:
+        return True
+    compact = re.sub(r"[^a-zà-ÿ0-9 ]+", " ", t)
+    compact = re.sub(r"\s+", " ", compact).strip()
+    starters = ("donc ", "est ce que ", "est-ce que ", "je dois ", "faut il ", "faut-il ",
+                "je rouvre ", "je referme ", "je ferme ", "j ouvre ", "j'ouvre ",
+                "ensuite ", "apres ", "après ", "comment ", "pourquoi ", "quoi faire",
+                "quelle etape", "quelle étape", "etape a suivre", "étape à suivre")
+    return compact.startswith(starters)
+
+
 def normalize_measurement_value(key, raw):
     text = str(raw).strip().replace(",", ".")
     if re.fullmatch(r"-?\d+(?:\.\d+)?", text):
@@ -357,8 +380,29 @@ def parse_measurement_bundle(text, current_key):
     return {}
 
 
+def canonical_identity_value(key, value):
+    if value is None:
+        return ""
+    s = str(value).lower().replace(",", ".").strip()
+    if key == "modele":
+        return re.sub(r"[^a-z0-9]", "", s)
+    if key == "diametre":
+        compact = re.sub(r"\s+", "", s).replace('"', "")
+        dn = re.search(r"dn\s*(\d+)", s)
+        if dn:
+            return "dn" + dn.group(1)
+        inch_map = {
+            "1/2":"dn15","3/4":"dn20","1":"dn25",
+            "11/4":"dn32","1.1/4":"dn32","1-1/4":"dn32",
+            "11/2":"dn40","1.1/2":"dn40","1-1/2":"dn40",
+            "2":"dn50","21/2":"dn65","2.1/2":"dn65","2-1/2":"dn65",
+            "3":"dn80","4":"dn100"
+        }
+        return inch_map.get(compact, re.sub(r"[^a-z0-9/]", "", compact))
+    return re.sub(r"\s+", " ", s)
+
+
 def merge_photo_device_data(data, extracted_device):
-    """Une photo complète les champs manquants mais n'écrase jamais l'identité déjà attribuée à l'appareil."""
     target = data.setdefault("current_device", {})
     valid = {x[0] for x in DEVICE_STEPS}
     identity_keys = {"marque", "modele", "type", "serie", "diametre"}
@@ -369,7 +413,7 @@ def merge_photo_device_data(data, extracted_device):
             continue
         if not has_answer(target.get(k)):
             target[k] = v
-        elif k in identity_keys and str(target.get(k)).strip().lower() != str(v).strip().lower():
+        elif k in identity_keys and canonical_identity_value(k, target.get(k)) != canonical_identity_value(k, v):
             conflicts.append((k, target.get(k), v))
     return conflicts
 
@@ -559,43 +603,57 @@ def guided_prompt(session, key, base_prompt):
         "type": "🔎 Vérifie le marquage du type (par ex. BA). Ne le déduis pas uniquement à la forme de l'appareil.",
         "serie": "🔎 Recopie uniquement le numéro réellement lisible. Sinon réponds « illisible ».",
         "diametre": "🔎 Lis le DN sur le corps ou la plaque. Exemple : DN20, DN50, DN80.",
+        "preparation_controle": (
+            "🧰 AVANT LE PREMIER ESSAI — on prépare tout une fois.\n"
+            "1. Demande au contact du site l'autorisation d'interrompre l'alimentation et confirme qu'aucun équipement/process/réseau sensible n'a besoin d'eau.\n"
+            "2. Repère la flèche et identifie P1 = amont, P2 = zone intermédiaire, P3 = aval. Si un repère est douteux : photo/notice, jamais au hasard.\n"
+            "3. Identifie les voies de la mallette. Les couleurs ne sont utilisées que si elles sont confirmées sur la mallette/notice.\n"
+            "4. Robinets de prises de contrôle fermés avant raccordement. Raccorde les flexibles sur les prises identifiées selon le mode opératoire de la mallette.\n"
+            "5. Ouvre ensuite les robinets de contrôle progressivement, purge les flexibles selon la mallette et vérifie l'absence de fuite.\n"
+            "6. Laisse les vannes d'arrêt amont et aval en position normale de service jusqu'au début du premier essai.\n"
+            "👉 Quand la mallette est raccordée, purgée et stable : appuie sur Prêt."
+        ),
         "vanne_amont": (
-            "🧰 OBJECTIF : vérifier que la vanne AMONT isole réellement, pas seulement qu'elle tourne.\n"
-            "1. Repère le sens de l'eau avec la flèche du disconnecteur. La vanne avant la flèche est l'amont.\n"
-            "2. AVANT DE COUPER : demande au contact du site : « Est-ce que je peux interrompre cette alimentation quelques minutes ? "
-            "Est-ce qu'un équipement, un process, une production, un remplissage de chaudière ou un réseau sensible a besoin de cette eau ? » "
-            "Si c'est un réseau incendie/sécurité ou si le contact n'est pas sûr, ne coupe pas sans procédure/autorisation du site.\n"
-            "3. Raccorde la mallette sur les prises de contrôle identifiées du disconnecteur, puis purge les flexibles selon la notice de la mallette. "
-            "Ne desserre jamais un raccord sous pression.\n"
-            "4. Ferme la vanne AMONT lentement.\n"
-            "5. Pour vérifier si elle ferme vraiment : sur le côté APRÈS la vanne amont (côté disconnecteur), utilise la prise de contrôle prévue "
-            "et la purge/robinet de la mallette pour faire baisser nettement la pression. Fais-le doucement vers un récipient ou une évacuation adaptée.\n"
-            "6. Referme ensuite la purge et observe la pression pendant environ 30 à 60 secondes.\n"
-            "   • Si la pression reste basse/stable : la vanne amont isole correctement.\n"
-            "   • Si la pression remonte progressivement alors que la vanne est fermée : elle laisse passer.\n"
-            "7. Choisis ensuite « Ferme bien », « Laisse passer » ou « Non vérifiable ». "
-            "Si la prise de contrôle n'est pas clairement identifiée, ne devine pas : marque Non vérifiable."
+            "🟠 ÉTAPE 1/6 — VANNE AMONT\n"
+            "Départ : mallette déjà raccordée/purgée, amont OUVERT, aval OUVERT.\n"
+            "1. Ferme LENTEMENT la vanne amont.\n"
+            "2. Fais chuter la pression côté disconnecteur après cette vanne par la prise/purge prévue dans le mode opératoire.\n"
+            "3. Referme la purge et observe 30 à 60 s.\n"
+            "4. Pression qui remonte = vanne amont non étanche. Pression basse/stable = elle isole.\n"
+            "👉 Choisis le résultat. Discobot te donnera ensuite la transition exacte."
+        ),
+        "clapet_amont": (
+            "🟠 ÉTAPE 2/6 — CLAPET AMONT\n"
+            "1. Remets l'appareil dans l'état demandé par le mode opératoire après l'essai de vanne amont.\n"
+            "2. Le but est de vérifier que P1 ne réalimente pas anormalement P2 à travers le 1er clapet.\n"
+            "3. Utilise les prises P1/P2 et les robinets de la mallette selon sa procédure, puis observe P1, P2 et la décharge.\n"
+            "4. Si P2 se reconstitue depuis P1 alors que le clapet doit isoler, note Anomalie.\n"
+            "👉 Si tu ne sais pas quelle vanne/prise manœuvrer, demande-le : Discobot reste sur cette étape."
+        ),
+        "soupape_decharge": (
+            "🟠 ÉTAPE 3/6 — SOUPAPE / DÉCHARGE\n"
+            "1. Garde la mallette raccordée.\n"
+            "2. Fais évoluer progressivement P1-P2 selon le mode opératoire de la mallette.\n"
+            "3. Observe l'apparition des premières gouttes et vérifie ensuite que la décharge se referme quand les conditions normales reviennent.\n"
+            "4. Ne conclus pas 'clapet HS' sur le seul écoulement.\n"
+            "👉 Choisis RAS / Anomalie / Non vérifiable."
         ),
         "vanne_aval": (
-            "🧰 OBJECTIF : vérifier que la vanne AVAL isole réellement.\n"
-            "1. Repère la vanne située après le disconnecteur dans le sens de la flèche.\n"
-            "2. AVANT DE COUPER : confirme avec l'interlocuteur qu'aucun équipement ni service n'a besoin de cette alimentation pendant l'essai. "
-            "Sur un réseau incendie/sécurité, ne coupe pas sans autorisation et procédure du site.\n"
-            "3. Raccorde la mallette sur les prises prévues et purge les flexibles. Ne démonte rien sous pression.\n"
-            "4. Ferme la vanne AVAL lentement.\n"
-            "5. Si tu disposes d'un point de purge ou d'un robinet sûr situé APRÈS cette vanne, fais chuter légèrement la pression côté installation, "
-            "puis referme ce point. Observe ensuite si la pression se reconstitue alors que la vanne aval est censée être fermée.\n"
-            "6. Si la pression remonte côté isolé, la vanne laisse passer. Si elle reste stable, la fermeture est correcte. "
-            "S'il n'existe aucun point sûr permettant ce test, choisis « Non vérifiable » plutôt que de conclure au hasard.\n"
-            "👉 Choisis ensuite simplement le bouton correspondant."
+            "🟠 ÉTAPE 4/6 — VANNE AVAL\n"
+            "Transition : si l'amont a été fermé, ROUVRE-LE LENTEMENT et attends la stabilisation avant de tester l'aval.\n"
+            "1. Ferme LENTEMENT la vanne aval.\n"
+            "2. Fais chuter la pression après la vanne aval par un point de purge sûr si l'installation/procédure le permet.\n"
+            "3. Referme ce point et observe 30 à 60 s.\n"
+            "4. Pression qui remonte = vanne aval non étanche. Pression basse/stable = elle isole.\n"
+            "👉 Choisis le résultat."
         ),
-        "clapets": (
-            "🔧 CONTRÔLE CLAPETS / DÉCHARGE — sans conclure trop vite.\n"
-            "1. Observe d'abord la décharge appareil en service : sèche, goutte à goutte ou écoulement continu ?\n"
-            "2. Note ce comportement AVANT de démonter quoi que ce soit.\n"
-            "3. Pendant les manœuvres prévues, regarde comment évoluent P1, P2 et P3 et si la décharge s'ouvre/se referme.\n"
-            "4. Une fuite à la décharge est un symptôme : elle ne prouve pas à elle seule quel clapet est en cause.\n"
-            "5. Si le comportement est normal, choisis RAS. Si tu vois un défaut, choisis Anomalie. Si l'essai n'est pas exploitable, Non vérifiable."
+        "clapet_aval": (
+            "🟠 ÉTAPE 5/6 — CLAPET AVAL\n"
+            "1. On distingue ici la vanne aval extérieure du clapet aval interne.\n"
+            "2. Mets l'appareil dans l'état prévu par le mode opératoire pour observer si une pression P3 se transmet vers P2.\n"
+            "3. Si P3 réalimente P2 alors que les isolements extérieurs sont fiables, le clapet aval devient suspect/défectueux.\n"
+            "4. Une simple fuite à la décharge ne suffit pas à condamner ce clapet.\n"
+            "👉 Choisis RAS / Anomalie / Non vérifiable."
         ),
         "pression_amont": (
             "📏 Branche le manomètre AMONT sur la prise amont identifiée par le constructeur. "
@@ -610,12 +668,12 @@ def guided_prompt(session, key, base_prompt):
             "Écris la valeur réelle avec l'unité. Si aucune prise n'est identifiable, choisis « Non vérifiable » plutôt que d'inventer."
         ),
         "differentiel": (
-            "📐 OBJECTIF : mesurer l'écart de pression entre l'amont et la zone intermédiaire.\n"
-            "1. Identifie clairement les deux prises concernées d'après le marquage/notice du modèle.\n"
-            "2. Raccorde les deux voies du manomètre différentiel à ces prises et purge l'air des flexibles.\n"
-            "3. Ouvre les prises de contrôle doucement jusqu'à obtenir une lecture stable.\n"
-            "4. La valeur affichée est le différentiel : note-la telle quelle avec son unité (mbar ou bar).\n"
-            "5. Discobot compare ensuite cette valeur au critère du modèle identifié ; il ne doit jamais appliquer un seuil d'un autre disconnecteur."
+            "🟠 ÉTAPE 6/6 — DIFFÉRENTIEL D'OUVERTURE DE LA DÉCHARGE\n"
+            "1. La mallette doit déjà être raccordée et purgée : ne rebranche rien ici.\n"
+            "2. Fais varier progressivement ΔP = P1-P2 selon le mode opératoire.\n"
+            "3. Regarde la décharge en même temps. Dès les PREMIÈRES GOUTTES, relève immédiatement ΔP.\n"
+            "4. Saisis la valeur avec son unité.\n"
+            "5. Discobot n'applique un seuil constructeur que si le modèle/critère est identifié avec certitude."
         ),
         "essais": (
             "🧪 Fais les essais d'ouverture/fermeture de la décharge et d'étanchéité selon la procédure du modèle. "
@@ -646,7 +704,7 @@ def guided_prompt(session, key, base_prompt):
             "Discobot utilisera ce seuil seulement pour ce modèle identifié."
         )
 
-    if key in {"vanne_amont", "vanne_aval", "clapets", "pression_amont", "pression_zone", "pression_aval", "differentiel", "essais"}:
+    if key in {"preparation_controle", "vanne_amont", "clapet_amont", "soupape_decharge", "vanne_aval", "clapet_aval", "pression_amont", "pression_zone", "pression_aval", "differentiel", "essais"}:
         guide += (
             "\n\n⚠️ Manipulation hydraulique : procédure destinée à un adulte/technicien autorisé. "
             "Le texte doit être simple à comprendre, mais on ne fait pas manipuler un réseau sous pression à un enfant."
@@ -1133,7 +1191,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.6 — diagnostic automatique\n\n"
+        "👋 Discobot Aqualeo V0.7 — protocole pas à pas\n\n"
         "1er passage : contrôle + diagnostic.\n"
         "2e passage : intervention uniquement si nécessaire.\n\n"
         "Prix : aucune estimation fournisseur inventée. "
@@ -1251,10 +1309,15 @@ async def callback_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Cette étape n'est plus active.", show_alert=True)
         return
 
-    if key == "clapets":
+    if key == "preparation_controle":
         labels = {
-            "ok": "RAS au contrôle clapets / décharge",
-            "anomaly": "anomalie constatée sur clapets / décharge",
+            "ok": "préparation terminée / mallette raccordée et purgée",
+            "nv": {"status": "non_verifiable"},
+        }
+    elif key in {"clapet_amont", "soupape_decharge", "clapet_aval"}:
+        labels = {
+            "ok": "RAS au contrôle",
+            "anomaly": "anomalie constatée",
             "nv": {"status": "non_verifiable"},
         }
     else:
@@ -1289,6 +1352,53 @@ async def callback_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await advance(session, chat_id, {"status": status}, context)
+
+
+async def answer_technical_question(session, key, question):
+    data = session["data"]
+    ident = device_identity(data) or "modèle non confirmé"
+    q = (question or "").strip().lower()
+
+    if key == "vanne_aval" and ("amont" in q or "rouvr" in q or "ouvrir" in q):
+        return (
+            "✅ Oui.\n"
+            "1. Vérifie que la purge précédente est refermée.\n"
+            "2. ROUVRE LENTEMENT la vanne amont.\n"
+            "3. Attends la stabilisation.\n"
+            "4. FERME ensuite LENTEMENT la vanne aval.\n"
+            "5. Fais chuter la pression après la vanne aval par un point sûr, referme, puis observe 30 à 60 s.\n"
+            "➡️ Remontée = vanne aval non étanche ; stable = vanne étanche.\n\n"
+            "Je reste sur l'étape vanne aval jusqu'à ton résultat."
+        )
+
+    if any(w in q for w in ["branch", "mallette", "flexible", "p1", "p2", "p3", "prise"]):
+        return (
+            "🧰 Branchement : P1=amont, P2=zone intermédiaire, P3=aval. "
+            "Robinets de prises fermés avant raccordement ; branche chaque voie sur la prise identifiée, "
+            "puis ouvre progressivement et purge selon la notice de la mallette. "
+            "Je n'utilise une couleur que si elle est confirmée par la mallette/notice."
+        )
+
+    if AI_CLIENT:
+        guide = guided_prompt(session, key, get_step(session["current_step"])[3])
+        prompt = f"""Tu es Discobot, assistant terrain pour contrôle BA.
+Question du technicien pendant l'étape {key}, appareil {ident}.
+Réponds à la question sans avancer l'étape.
+Guide actuel: {guide}
+Question: {question}
+Réponse française simple, 2 à 7 actions. Dis clairement quelles vannes ouvrir/fermer et quoi observer si pertinent.
+N'invente jamais couleurs, prises, seuils ou séquence constructeur non confirmés. Si ça dépend de la notice de la mallette/modèle, dis-le."""
+        try:
+            response = await AI_CLIENT.responses.create(
+                model=OPENAI_MODEL,
+                input=[{"role":"user","content":[{"type":"input_text","text":prompt}]}],
+            )
+            ans=(response.output_text or "").strip()
+            if ans:
+                return ans
+        except Exception as exc:
+            print(f"[Discobot] Réponse terrain IA impossible: {exc}")
+    return "Je reste sur cette étape.\n\n" + guided_prompt(session, key, get_step(session["current_step"])[3])
 
 
 async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1379,6 +1489,11 @@ async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (msg.text or "").strip()
     if not text:
         await msg.reply_text("J'attends une réponse texte, ou utilise un bouton de statut.")
+        return
+
+    if idx >= len(SITE_STEPS) and (is_help_request(text) or is_technical_question(text)):
+        answer = await answer_technical_question(session, key, text)
+        await msg.reply_text("🧠 " + answer)
         return
 
     if is_help_request(text):
