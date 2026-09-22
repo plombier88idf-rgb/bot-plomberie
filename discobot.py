@@ -69,6 +69,17 @@ DEVICE_STEPS = [
 
 ALL_STEPS = SITE_STEPS + DEVICE_STEPS
 
+# Le dossier d'entrée doit rester ultra simple. Les coordonnées de contact détaillées
+# sont conservées si elles sont lues sur le document, mais elles ne doivent jamais
+# bloquer le passage au contrôle ni être redemandées une par une.
+OPTIONAL_SITE_KEYS = {
+    "contact_nom",
+    "contact_fonction",
+    "contact_email",
+    "contact_tel",
+    "nombre_appareils",
+}
+
 STATUS_LABELS = {
     "passed": "PASSÉ",
     "impossible": "IMPOSSIBLE",
@@ -356,7 +367,14 @@ Réponds uniquement avec un objet JSON valide, sans markdown, sous cette forme :
   ],
   "notes": null
 }
-Pour nombre_appareils, utilise un entier seulement s'il est explicite ou si le document montre clairement une liste exhaustive.
+Règles d'extraction importantes :
+- Lis tout le document : en-tête, donneur d'ordre, établissement, adresse d'intervention, contact, téléphone, e-mail, tableau, remarques et liste d'appareils.
+- Distingue le client / donneur d'ordre du site d'intervention quand les deux sont clairement visibles.
+- Si un seul établissement ou organisme est clairement visible et qu'aucun client distinct n'est indiqué, tu peux mettre ce même nom dans "client" et "site" : cela évite de redemander deux fois la même chose.
+- "contact_nom" = la personne utile pour ce dossier si elle est explicitement présente. Mets aussi son e-mail et son téléphone dans les champs dédiés lorsqu'ils sont visibles.
+- Pour nombre_appareils, utilise un entier seulement s'il est explicite ou si le document montre clairement une liste exhaustive.
+- Si plusieurs disconnecteurs/appareils sont clairement listés, crée un objet distinct par appareil avec tout ce qui est lisible : emplacement, marque, modèle, type, série et diamètre.
+- Une donnée incertaine reste null. Ne transforme jamais une supposition en information certaine.
 Pour une photo de document, lis le document. Pour une photo d'installation, relève seulement ce qui est lisible ou visible.
 """
     content = [{"type": "input_text", "text": prompt}]
@@ -455,18 +473,39 @@ def has_answer(value):
     return bool(str(value).strip())
 
 
+def normalize_intake_defaults(data):
+    """Réduit les répétitions du dossier d'entrée sans inventer de coordonnées."""
+    site = data.setdefault("site", {})
+
+    if has_answer(site.get("client")) and not has_answer(site.get("site")):
+        site["site"] = site["client"]
+    elif has_answer(site.get("site")) and not has_answer(site.get("client")):
+        site["client"] = site["site"]
+
+    if not has_answer(site.get("nombre_appareils")):
+        prefills = data.get("prefill_devices") or []
+        site["nombre_appareils"] = len(prefills) if prefills else 1
+
+
 def next_missing_step(session, start_index=0):
     data = session["data"]
+    normalize_intake_defaults(data)
+
     for idx in range(max(0, start_index), len(ALL_STEPS)):
         key, _, _, _ = get_step(idx)
+
         if idx < len(SITE_STEPS):
             if has_answer(data.get("site", {}).get(key)):
                 continue
+            if key in OPTIONAL_SITE_KEYS:
+                continue
             return idx
+
         prepare_device_prefill(data)
         if has_answer(data.get("current_device", {}).get(key)):
             continue
         return idx
+
     return len(ALL_STEPS)
 
 
@@ -495,8 +534,8 @@ def build_intake_preview(data):
         if parts:
             lines.append(f"• Appareil {i} : " + " — ".join(parts))
     lines.append("")
-    lines.append("Je garde ces informations et je ne te redemande que ce qui manque.")
-    lines.append("Pour corriger : écris par exemple « adresse: ... » ou « email: ... ».")
+    lines.append("Je garde tout ce qui est déjà lu : je ne te le redemanderai pas.")
+    lines.append("S'il faut corriger quelque chose, écris simplement la correction en une phrase.")
     return "\n".join(lines)
 
 
@@ -670,12 +709,11 @@ async def nouveau(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = get_session(user_id, chat_id)
     await update.effective_message.reply_text(
         "🆕 Nouveau dossier / contrôle créé.\n\n"
-        "Tu peux commencer de 3 façons :\n"
-        "• 📸 envoie directement une photo du dossier / ordre d'intervention ;\n"
-        "• ✍️ écris toutes les infos en une phrase (site + adresse + contact...) ;\n"
-        "• ou réponds simplement aux questions une par une.\n\n"
-        "Exemple : « Lycée Lucie Aubrac 51 rue Victor Hugo 93500 Pantin, 2 disconnecteurs ».\n"
-        "Discobot range les informations et ne redemande que ce qui manque."
+        "Le plus simple : 📸 envoie directement une photo du dossier / ordre d'intervention.\n"
+        "Discobot doit lire le client, le site, l'adresse, le contact utile et les appareils présents.\n\n"
+        "Sinon, écris tout en UNE phrase.\n"
+        "Exemple : « Lycée Lucie Aubrac, 51 rue Victor Hugo 93500 Pantin, 2 disconnecteurs ».\n\n"
+        "Je range les informations et je ne redemande jamais ce qui est déjà connu."
     )
 
 
@@ -797,15 +835,15 @@ async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_session(session)
             if AI_CLIENT is None:
                 await msg.reply_text(
-                    "📷 Photo enregistrée, mais l'analyse intelligente des photos n'est pas activée "
-                    "(variable OPENAI_API_KEY manquante). Je poursuis sans inventer son contenu."
+                    "📷 Photo enregistrée. La lecture intelligente de la photo n'est pas encore activée sur le serveur.\n\n"
+                    "En attendant, envoie-moi UNE seule phrase avec ce que tu as : "
+                    "client/établissement + adresse + contact utile. Je répartirai les infos tout seul."
                 )
             else:
                 await msg.reply_text(
-                    "📷 Photo enregistrée, mais je n'ai pas pu en extraire d'information certaine. "
-                    "Je poursuis sans rien inventer."
+                    "📷 Photo enregistrée, mais je n'ai pas pu lire d'information certaine.\n\n"
+                    "Envoie-moi simplement les infos lisibles en UNE phrase ; je ne te ferai pas remplir les champs un par un."
                 )
-            await send_step(chat_id, session, context)
         return
 
     # Pendant le contrôle, la photo est archivée et peut aussi préremplir marque / modèle / DN / série.
