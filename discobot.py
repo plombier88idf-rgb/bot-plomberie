@@ -216,6 +216,290 @@ def get_step(step_index):
     return ALL_STEPS[step_index]
 
 
+ADDRESS_RE = re.compile(
+    r"\b\d{1,4}(?:\s*(?:bis|ter))?\s+"
+    r"(?:rue|avenue|av\.?|boulevard|bd\.?|route|chemin|all[ée]e|impasse|place|quai|cours)\b"
+    r".*?\b\d{5}\s+[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’\- ]*",
+    re.IGNORECASE,
+)
+EMAIL_RE = re.compile(r"\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+PHONE_RE = re.compile(r"(?<!\d)(?:(?:\+33|0)[1-9](?:[ .\-]?\d{2}){4})(?!\d)", re.IGNORECASE)
+
+
+def clean_value(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip(" \t\n,;:-")
+        return value or None
+    return value
+
+
+def local_smart_extract(text):
+    """Extraction prudente sans IA : adresse, e-mail, téléphone, nombre et champs préfixés."""
+    text = (text or "").strip()
+    out = {"site": {}, "devices": [], "notes": ""}
+    if not text:
+        return out
+
+    explicit = {
+        "client": r"(?:^|\n)\s*client\s*[:=]\s*([^\n;]+)",
+        "site": r"(?:^|\n)\s*site\s*[:=]\s*([^\n;]+)",
+        "adresse": r"(?:^|\n)\s*adresse\s*[:=]\s*([^\n;]+)",
+        "contact_nom": r"(?:^|\n)\s*(?:contact|nom)\s*[:=]\s*([^\n;]+)",
+        "contact_fonction": r"(?:^|\n)\s*(?:fonction|service)\s*[:=]\s*([^\n;]+)",
+        "contact_email": r"(?:^|\n)\s*(?:e-?mail|mail)\s*[:=]\s*([^\n;]+)",
+        "contact_tel": r"(?:^|\n)\s*(?:t[ée]l(?:[ée]phone)?)\s*[:=]\s*([^\n;]+)",
+    }
+    for key, pattern in explicit.items():
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            out["site"][key] = clean_value(m.group(1))
+
+    m = EMAIL_RE.search(text)
+    if m and not out["site"].get("contact_email"):
+        out["site"]["contact_email"] = m.group(0)
+
+    m = PHONE_RE.search(text)
+    if m and not out["site"].get("contact_tel"):
+        out["site"]["contact_tel"] = m.group(0)
+
+    m = ADDRESS_RE.search(text)
+    if m:
+        out["site"]["adresse"] = clean_value(m.group(0))
+        prefix = clean_value(text[:m.start()])
+        if prefix and not out["site"].get("site"):
+            prefix = re.sub(r"^(?:site\s*[:=]\s*)", "", prefix, flags=re.IGNORECASE)
+            if len(prefix) <= 120:
+                out["site"]["site"] = prefix
+
+    m = re.search(r"\b(\d{1,2})\s+(?:disconnecteur(?:s)?|appareil(?:s)?|BA)\b", text, re.IGNORECASE)
+    if m:
+        out["site"]["nombre_appareils"] = int(m.group(1))
+
+    device = {}
+    m = re.search(r"\bDN\s*([0-9]{2,3})\b", text, re.IGNORECASE)
+    if m:
+        device["diametre"] = f"DN{m.group(1)}"
+    m = re.search(r"\b(BA|CA|EA|HA|HD|DC)\b", text, re.IGNORECASE)
+    if m:
+        device["type"] = m.group(1).upper()
+    m = re.search(r"\b(?:n[°o]\s*(?:de\s*)?s[ée]rie|s[ée]rie)\s*[:#-]?\s*([A-Z0-9._/-]{4,})", text, re.IGNORECASE)
+    if m:
+        device["serie"] = m.group(1)
+    if device:
+        out["devices"].append(device)
+
+    return out
+
+
+def extraction_has_data(extracted):
+    if not extracted:
+        return False
+    if any(clean_value(v) is not None for v in (extracted.get("site") or {}).values()):
+        return True
+    return any(any(clean_value(v) is not None for v in d.values()) for d in (extracted.get("devices") or []))
+
+
+def merge_extractions(base, extra):
+    result = {
+        "site": dict((base or {}).get("site") or {}),
+        "devices": list((base or {}).get("devices") or []),
+        "notes": (base or {}).get("notes") or "",
+    }
+    if not extra:
+        return result
+    for key, value in (extra.get("site") or {}).items():
+        value = clean_value(value)
+        if value is not None:
+            result["site"][key] = value
+    if extra.get("devices"):
+        result["devices"] = [
+            {k: clean_value(v) for k, v in d.items() if clean_value(v) is not None}
+            for d in extra["devices"] if isinstance(d, dict)
+        ]
+    if clean_value(extra.get("notes")):
+        result["notes"] = clean_value(extra.get("notes"))
+    return result
+
+
+async def ai_extract(text=None, image_data_uri=None):
+    """Extraction structurée par IA. Une donnée absente reste vide : aucune invention."""
+    if not AI_CLIENT:
+        return None
+
+    prompt = """
+Tu es le module d'extraction de Discobot Aqualeo.
+Extrais uniquement les informations réellement présentes dans le texte ou visibles sur l'image.
+N'invente jamais un nom, une adresse, un contact, une référence, un diamètre ou une mesure.
+Réponds uniquement avec un objet JSON valide, sans markdown, sous cette forme :
+{
+  "site": {
+    "client": null,
+    "site": null,
+    "adresse": null,
+    "contact_nom": null,
+    "contact_fonction": null,
+    "contact_email": null,
+    "contact_tel": null,
+    "nombre_appareils": null
+  },
+  "devices": [
+    {
+      "emplacement": null,
+      "marque": null,
+      "modele": null,
+      "type": null,
+      "serie": null,
+      "diametre": null
+    }
+  ],
+  "notes": null
+}
+Pour nombre_appareils, utilise un entier seulement s'il est explicite ou si le document montre clairement une liste exhaustive.
+Pour une photo de document, lis le document. Pour une photo d'installation, relève seulement ce qui est lisible ou visible.
+"""
+    content = [{"type": "input_text", "text": prompt}]
+    if text:
+        content.append({"type": "input_text", "text": f"Texte utilisateur :\n{text}"})
+    if image_data_uri:
+        content.append({"type": "input_image", "image_url": image_data_uri})
+
+    try:
+        response = await AI_CLIENT.responses.create(
+            model=OPENAI_MODEL,
+            input=[{"role": "user", "content": content}],
+        )
+        raw = (response.output_text or "").strip()
+        fence = chr(96) * 3
+        if raw.startswith(fence):
+            raw = re.sub(r"^.{3}(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+            raw = re.sub(r"\s*.{3}$", "", raw)
+        start, end = raw.find("{"), raw.rfind("}")
+        if start >= 0 and end > start:
+            raw = raw[start:end + 1]
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception as exc:
+        print(f"[Discobot] Analyse IA impossible: {exc}")
+        return None
+
+
+async def extract_from_message(update, context, include_photo=False):
+    text = (update.effective_message.text or update.effective_message.caption or "").strip()
+    local = local_smart_extract(text)
+    image_data_uri = None
+
+    if include_photo and update.effective_message.photo:
+        try:
+            photo = update.effective_message.photo[-1]
+            tg_file = await context.bot.get_file(photo.file_id)
+            blob = await tg_file.download_as_bytearray()
+            encoded = base64.b64encode(bytes(blob)).decode("ascii")
+            image_data_uri = f"data:image/jpeg;base64,{encoded}"
+        except Exception as exc:
+            print(f"[Discobot] Téléchargement photo impossible: {exc}")
+
+    ai = await ai_extract(text=text or None, image_data_uri=image_data_uri) if (text or image_data_uri) else None
+    return merge_extractions(local, ai)
+
+
+def apply_extraction(session, extracted):
+    if not extracted:
+        return
+    data = session["data"]
+    site = data.setdefault("site", {})
+    valid_site_keys = {x[0] for x in SITE_STEPS}
+
+    for key, value in (extracted.get("site") or {}).items():
+        value = clean_value(value)
+        if key in valid_site_keys and value is not None:
+            site[key] = value
+
+    cleaned_devices = []
+    valid_device_keys = {x[0] for x in DEVICE_STEPS}
+    for d in (extracted.get("devices") or []):
+        if not isinstance(d, dict):
+            continue
+        item = {}
+        for key, value in d.items():
+            value = clean_value(value)
+            if key in valid_device_keys and value is not None:
+                item[key] = value
+        if item:
+            cleaned_devices.append(item)
+
+    if cleaned_devices:
+        data["prefill_devices"] = cleaned_devices
+        if not site.get("nombre_appareils"):
+            site["nombre_appareils"] = len(cleaned_devices)
+
+    if clean_value(extracted.get("notes")):
+        data["notes_intake"] = clean_value(extracted.get("notes"))
+
+
+def prepare_device_prefill(data):
+    if data.get("current_device"):
+        return
+    idx = max(0, int(data.get("device_index", 1)) - 1)
+    prefills = data.get("prefill_devices") or []
+    if idx < len(prefills):
+        data["current_device"] = dict(prefills[idx])
+
+
+def has_answer(value):
+    if value is None:
+        return False
+    if isinstance(value, dict):
+        return bool(value)
+    return bool(str(value).strip())
+
+
+def next_missing_step(session, start_index=0):
+    data = session["data"]
+    for idx in range(max(0, start_index), len(ALL_STEPS)):
+        key, _, _, _ = get_step(idx)
+        if idx < len(SITE_STEPS):
+            if has_answer(data.get("site", {}).get(key)):
+                continue
+            return idx
+        prepare_device_prefill(data)
+        if has_answer(data.get("current_device", {}).get(key)):
+            continue
+        return idx
+    return len(ALL_STEPS)
+
+
+def build_intake_preview(data):
+    site = data.get("site", {})
+    lines = ["🧠 DOSSIER COMPRIS / PRÉREMPLI"]
+    labels = [
+        ("client", "Client"),
+        ("site", "Site"),
+        ("adresse", "Adresse"),
+        ("contact_nom", "Contact"),
+        ("contact_fonction", "Fonction"),
+        ("contact_email", "E-mail"),
+        ("contact_tel", "Téléphone"),
+        ("nombre_appareils", "Disconnecteurs"),
+    ]
+    for key, label in labels:
+        if has_answer(site.get(key)):
+            lines.append(f"• {label} : {value_text(site[key])}")
+    prefills = data.get("prefill_devices") or []
+    for i, device in enumerate(prefills, start=1):
+        parts = [
+            value_text(device[k]) for k in ("emplacement", "marque", "modele", "type", "diametre", "serie")
+            if has_answer(device.get(k))
+        ]
+        if parts:
+            lines.append(f"• Appareil {i} : " + " — ".join(parts))
+    lines.append("")
+    lines.append("Je garde ces informations et je ne te redemande que ce qui manque.")
+    lines.append("Pour corriger : écris par exemple « adresse: ... » ou « email: ... ».")
+    return "\n".join(lines)
+
+
 def total_devices(data):
     value = data.get("site", {}).get("nombre_appareils", 1)
     if isinstance(value, dict):
