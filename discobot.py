@@ -54,6 +54,36 @@ COMPANY_PHONE = os.environ.get("COMPANY_PHONE", "06 13 14 20 90").strip()
 COMPANY_SIREN = os.environ.get("COMPANY_SIREN", "").strip()
 QUOTE_FOLLOWUP_DAYS = int(os.environ.get("QUOTE_FOLLOWUP_DAYS", "10") or "10")
 
+# Grille commerciale Aqualeo V1 — contrôle/entretien périodique par appareil.
+# Pas de remise automatique pour un 2e appareil sur le même site.
+DN_CONTROL_PRICES_HT = {
+    15: 280.0,
+    20: 280.0,
+    25: 280.0,
+    32: 300.0,
+    40: 300.0,
+    50: 450.0,
+    65: 475.0,
+    80: 495.0,
+    100: 525.0,
+    125: 675.0,
+    150: 725.0,
+    200: 825.0,
+    250: 925.0,
+}
+
+SERVICE_TITLE = "Maintenance préventive et contrôle périodique des disconnecteurs"
+SERVICE_SCOPE = (
+    "Contrôle fonctionnel, mesures, diagnostic, entretien courant si prévu, "
+    "vérification de conformité de fonctionnement selon le modèle identifié, "
+    "le protocole constructeur disponible et les critères applicables connus."
+)
+SERVICE_LIMIT = (
+    "Le rapport décrit l'état et les mesures constatés le jour du contrôle. "
+    "Il ne doit pas être présenté comme une attestation réglementaire indépendante "
+    "ou une certification lorsque la qualification correspondante n'est pas renseignée."
+)
+
 allowed = os.environ.get("ALLOWED_TELEGRAM_USER_IDS", "").strip()
 ALLOWED_USER_IDS = {
     int(x.strip()) for x in allowed.split(",") if x.strip().isdigit()
@@ -196,7 +226,9 @@ def blank_data():
         "devices": [],
         "current_device": {},
         "device_index": 1,
-        "visit_type": "CONTROL_DIAGNOSTIC",
+        "visit_type": "MAINTENANCE_CONTROLE_PERIODIQUE",
+        "service_title": SERVICE_TITLE,
+        "service_scope": SERVICE_SCOPE,
         "dossier_status": "PROSPECT_A_QUALIFIER",
         "prefill_devices": [],
         "source_photos": [],
@@ -268,7 +300,7 @@ def persist_control(session):
         ])),
         total_devices(data),
         json.dumps(data, ensure_ascii=False),
-        data.get("visit_type", "CONTROL_DIAGNOSTIC"),
+        data.get("visit_type", "MAINTENANCE_CONTROLE_PERIODIQUE"),
         now_iso(),
     ))
     control_id = cur.lastrowid
@@ -1212,7 +1244,10 @@ def build_summary(data):
     site = data.get("site", {})
     devices = data.get("devices", [])
     lines = [
-        "📄 RAPPORT DE CONTRÔLE — DISCONNECTEUR(S) BA",
+        "📄 RAPPORT DE MAINTENANCE ET CONTRÔLE PÉRIODIQUE — DISCONNECTEUR(S)",
+        "",
+        f"Objet : {SERVICE_TITLE}",
+        f"Portée : {SERVICE_SCOPE}",
         "",
         f"Client : {value_text(site.get('client', '—'))}",
         f"Site : {value_text(site.get('site', '—'))}",
@@ -1258,9 +1293,12 @@ def build_summary(data):
         ])
 
     lines.extend([
+        "CONCLUSION / TRAÇABILITÉ",
+        "Le présent contrôle porte sur le fonctionnement des organes accessibles et sur les mesures réellement relevées au jour de l'intervention.",
+        SERVICE_LIMIT,
+        "",
         "RÈGLE DE DEVIS : une pièce interne n'est proposée que si le contrôle l'a isolée avec suffisamment de certitude.",
         "Référence et tarif fournisseur doivent être vérifiés avant génération d'un devis.",
-        "Aucun e-mail ni devis n'est envoyé automatiquement dans cette version de test.",
     ])
     return "\n".join(lines)
 
@@ -1300,7 +1338,7 @@ def report_pdf(control):
     text = build_summary(data)
     site = data.get("site", {})
     name = safe_filename(site.get("site") or site.get("client") or f"controle_{control['id']}")
-    buf = pdf_from_lines("Rapport de contrôle disconnecteur(s) BA", text.splitlines())
+    buf = pdf_from_lines("Rapport de maintenance / contrôle périodique disconnecteur(s)", text.splitlines())
     buf.name = f"Rapport_Controle_{name}_{control['id']}.pdf"
     return buf
 
@@ -1485,7 +1523,47 @@ def parse_billing_text(text):
     return result
 
 
+def parse_dn_number(value):
+    text = str(value or "").upper().replace("Ø", "DN")
+    m = re.search(r"DN\s*([0-9]{1,3})", text)
+    if not m:
+        m = re.search(r"\b(15|20|25|32|40|50|65|80|100|125|150|200|250)\b", text)
+    return int(m.group(1)) if m else None
+
+
+def commercial_dn_price(device):
+    dn = parse_dn_number(device.get("diametre"))
+    if dn is None:
+        return None, None
+    return dn, DN_CONTROL_PRICES_HT.get(dn)
+
+
+def commercial_control_total(control):
+    devices = control.get("data", {}).get("devices", [])
+    if not devices:
+        return None, "Aucun disconnecteur archivé."
+    total = 0.0
+    details = []
+    for idx, device in enumerate(devices, start=1):
+        dn, price = commercial_dn_price(device)
+        if dn is None:
+            return None, f"DN manquant ou illisible pour l'appareil {idx}."
+        if price is None:
+            return None, f"DN{dn} absent de la grille commerciale Aqualeo."
+        total += price
+        details.append({"device": idx, "dn": dn, "price_ht": price})
+    return {"base_ht": round(total, 2), "details": details}, None
+
+
 def calculate_control_price(control_id):
+    control = load_control(control_id)
+    if not control:
+        return None, "Contrôle introuvable."
+
+    commercial, commercial_err = commercial_control_total(control)
+    if commercial_err:
+        return None, commercial_err
+
     inputs = load_billing_inputs(control_id)
     if not inputs:
         return None, "Données de temps/déplacement manquantes."
@@ -1507,9 +1585,14 @@ def calculate_control_price(control_id):
 
     direct_cost = work_cost + travel_time_cost + vehicle_cost + cash_expenses
     revenue_to_cover_charges = direct_cost / (1.0 - social - overhead)
-    sell_ht = revenue_to_cover_charges / (1.0 - margin)
+    economic_floor_ht = revenue_to_cover_charges / (1.0 - margin)
     if cfg.get("minimum_ht") is not None:
-        sell_ht = max(sell_ht, cfg["minimum_ht"])
+        economic_floor_ht = max(economic_floor_ht, cfg["minimum_ht"])
+
+    # La grille DN est le prix commercial de référence. Péage/parking exceptionnels
+    # restent en supplément. Le plancher économique protège la rentabilité.
+    commercial_target_ht = commercial["base_ht"] + inputs["tolls"] + inputs["parking"]
+    sell_ht = max(commercial_target_ht, economic_floor_ht)
 
     return {
         "work_cost": round(work_cost, 2),
@@ -1517,6 +1600,10 @@ def calculate_control_price(control_id):
         "vehicle_cost": round(vehicle_cost, 2),
         "cash_expenses": round(cash_expenses, 2),
         "direct_cost": round(direct_cost, 2),
+        "economic_floor_ht": round(economic_floor_ht, 2),
+        "commercial_base_ht": commercial["base_ht"],
+        "commercial_target_ht": round(commercial_target_ht, 2),
+        "dn_details": commercial["details"],
         "sell_ht": round(sell_ht, 2),
         "travel_minutes": inputs["travel_minutes"],
         "work_minutes": inputs["work_minutes"],
@@ -1527,22 +1614,30 @@ def calculate_control_price(control_id):
         "other_expenses": inputs["other_expenses"],
     }, None
 
-
 def billing_internal_summary(control_id):
     calc, err = calculate_control_price(control_id)
     if err:
         return "💰 Calcul de facturation bloqué : " + err
+    dn_lines = "\n".join(
+        f"• Appareil {x['device']} — DN{x['dn']} : {x['price_ht']:.2f} € HT"
+        for x in calc["dn_details"]
+    )
     return (
         "💰 CALCUL INTERNE — non imprimé tel quel sur la facture\n"
+        "GRILLE COMMERCIALE PAR DN — aucune remise automatique multi-appareils\n"
+        f"{dn_lines}\n"
+        f"• Base commerciale appareils : {calc['commercial_base_ht']:.2f} € HT\n"
+        f"• Cible commerciale avec péage/parking : {calc['commercial_target_ht']:.2f} € HT\n\n"
+        "VÉRIFICATION DE RENTABILITÉ\n"
         f"• Travail : {calc['work_minutes']:.0f} min → coût interne {calc['work_cost']:.2f} €\n"
         f"• Trajet AR : {calc['travel_minutes']:.0f} min → coût interne {calc['travel_time_cost']:.2f} €\n"
         f"• Véhicule : {calc['km']:.1f} km → {calc['vehicle_cost']:.2f} €\n"
         f"• Péages/parking/consommables/autres : {calc['cash_expenses']:.2f} €\n"
         f"• Coût direct : {calc['direct_cost']:.2f} €\n"
-        f"• Prix calculé à facturer : {calc['sell_ht']:.2f} € HT\n"
-        "Les charges, frais généraux et la marge sont intégrés au calcul interne, pas affichés comme lignes client."
+        f"• Plancher économique chargé : {calc['economic_floor_ht']:.2f} € HT\n"
+        f"• PRIX RETENU : {calc['sell_ht']:.2f} € HT\n"
+        "Le prix retenu est le plus élevé entre la grille commerciale et le plancher économique."
     )
-
 
 def invoice_pdf(control):
     calc, err = calculate_control_price(control["id"])
@@ -1554,27 +1649,37 @@ def invoice_pdf(control):
     ttc = round(ht + tva, 2)
     data = control["data"]
     site = data.get("site", {})
+    device_lines = [
+        f"Appareil {x['device']} — DN{x['dn']} — maintenance / contrôle périodique : {x['price_ht']:.2f} € HT"
+        for x in calc["dn_details"]
+    ]
     lines = [
         COMPANY_NAME,
         f"Téléphone : {COMPANY_PHONE}",
         f"SIREN : {COMPANY_SIREN or 'à renseigner'}",
         "",
-        f"FACTURE PROVISOIRE — Contrôle n° {control['id']}",
+        f"FACTURE PROVISOIRE — Intervention n° {control['id']}",
         f"Client : {site.get('client','—')}",
         f"Site : {site.get('site','—')}",
         f"Adresse : {site.get('adresse','—')}",
         "",
-        f"Contrôle / diagnostic disconnecteur(s) BA — temps de travail et déplacement inclus : {ht:.2f} € HT",
+        SERVICE_TITLE,
+        "Contrôle fonctionnel, mesures, diagnostic et rapport de traçabilité.",
+        *device_lines,
+        "",
+        f"Base commerciale appareils : {calc['commercial_base_ht']:.2f} € HT",
+        f"Prix retenu de la prestation : {ht:.2f} € HT",
         f"TVA {VAT_RATE:.1f}% : {tva:.2f} €",
         f"TOTAL TTC : {ttc:.2f} €",
         "",
         f"Déplacement pris en compte : {calc['travel_minutes']:.0f} min AR / {calc['km']:.1f} km.",
-        f"Frais réels pris en compte dans le prix : péages {calc['tolls']:.2f} €, parking {calc['parking']:.2f} €, consommables {calc['consumables']:.2f} €, autres {calc['other_expenses']:.2f} €.",
+        f"Péage : {calc['tolls']:.2f} € — parking : {calc['parking']:.2f} €.",
         "",
-        "Les charges internes et la marge ne sont pas détaillées sur la facture client.",
+        "Les coûts internes, charges, frais généraux et marge ne sont pas détaillés sur la facture client.",
+        SERVICE_LIMIT,
         "Document généré à partir du contrôle archivé. À valider avant envoi."
     ]
-    buf = pdf_from_lines("Facture contrôle — Aqualeo", lines)
+    buf = pdf_from_lines("Facture maintenance / contrôle disconnecteur(s) — Aqualeo", lines)
     buf.name = f"Facture_Controle_{control['id']}.pdf"
     return buf, None
 
@@ -1844,9 +1949,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.11 — facturation rentable\n\n"
-        "1er passage : contrôle + diagnostic.\n"
-        "2e passage : intervention uniquement si nécessaire.\n\n"
+        "👋 Discobot Aqualeo V0.12 — grille DN + maintenance pro\n\n"
+        "1er passage : maintenance préventive + contrôle périodique + diagnostic.\n"
+        "Rapport : mesures, vérification fonctionnelle, conclusion et traçabilité.\n"
+        "2e passage : réparation uniquement si nécessaire et validée.\n\n"
         "Prix : aucune estimation fournisseur inventée. "
         "Chaque tarif utilisé pour un devis devra avoir une source et une date de vérification, "
         "avec alerte de mise à jour au-delà de 31 jours.\n\n"
@@ -1913,27 +2019,34 @@ async def tarifs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text("Accès non autorisé.")
         return
 
+    grid = [
+        "💶 GRILLE AQUALEO V1 — maintenance / contrôle périodique",
+        "",
+        "DN15–25 : 280 € HT / appareil",
+        "DN32–40 : 300 € HT / appareil",
+        "DN50 : 450 € HT / appareil",
+        "DN65 : 475 € HT / appareil",
+        "DN80 : 495 € HT / appareil",
+        "DN100 : 525 € HT / appareil",
+        "DN125 : 675 € HT / appareil",
+        "DN150 : 725 € HT / appareil",
+        "DN200 : 825 € HT / appareil",
+        "DN250 : 925 € HT / appareil",
+        "",
+        "Règle : chaque appareil garde son prix selon DN. Aucune remise automatique multi-appareils.",
+        "Discobot compare ensuite cette grille au plancher économique réel et retient le montant le plus élevé.",
+        "Péages et parking exceptionnels sont ajoutés.",
+    ]
+
     con = connect_db()
     prices = find_prices(con)
     con.close()
-
-    if not prices:
-        await update.effective_message.reply_text(
-            "💶 Base tarifs vide pour le moment.\n\n"
-            "Aucun devis automatique ne sera calculé avec un prix inventé. "
-            "Les tarifs devront venir d'une source vérifiée : compte fournisseur, export tarif, facture d'achat ou prix confirmé."
-        )
-        return
-
-    fresh = sum(1 for p in prices if p["fresh"])
-    stale = len(prices) - fresh
-    await update.effective_message.reply_text(
-        f"💶 Base tarifs\n\n"
-        f"Références enregistrées : {len(prices)}\n"
-        f"Tarifs à jour (≤31 jours) : {fresh}\n"
-        f"Tarifs à actualiser : {stale}\n\n"
-        "Les tarifs périmés ne seront pas utilisés automatiquement pour établir un devis."
-    )
+    grid.extend([
+        "",
+        f"Pièces fournisseur enregistrées : {len(prices)}",
+        f"Tarifs pièces à jour (≤31 jours) : {sum(1 for p in prices if p['fresh'])}",
+    ])
+    await update.effective_message.reply_text("\n".join(grid))
 
 
 async def callback_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
