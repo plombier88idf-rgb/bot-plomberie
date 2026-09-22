@@ -72,17 +72,26 @@ DN_CONTROL_PRICES_HT = {
     250: 925.0,
 }
 
-SERVICE_TITLE = "Maintenance préventive et contrôle périodique des disconnecteurs"
+SERVICE_TITLE = "Entretien / maintenance et contrôle périodique des disconnecteurs"
 SERVICE_SCOPE = (
-    "Contrôle fonctionnel, mesures, diagnostic, entretien courant si prévu, "
-    "vérification de conformité de fonctionnement selon le modèle identifié, "
-    "le protocole constructeur disponible et les critères applicables connus."
+    "Vérification de l'installation accessible, essais des organes, mesures, diagnostic, "
+    "entretien du dispositif lorsque prévu, et contrôle du bon fonctionnement selon "
+    "le modèle identifié, les préconisations du fabricant et les critères applicables."
 )
 SERVICE_LIMIT = (
-    "Le rapport décrit l'état et les mesures constatés le jour du contrôle. "
-    "Il ne doit pas être présenté comme une attestation réglementaire indépendante "
-    "ou une certification lorsque la qualification correspondante n'est pas renseignée."
+    "Le compte-rendu conclut sur le dispositif contrôlé au jour de l'intervention : "
+    "fonctionnement conforme au contrôle réalisé, anomalie / action corrective requise, "
+    "ou contrôle non vérifiable. Il ne porte pas sur les parties de l'installation "
+    "situées hors du périmètre effectivement contrôlé."
 )
+REGULATORY_NOTE = (
+    "Référence : arrêté du 10 septembre 2021 relatif à la protection des réseaux d'eau "
+    "contre les pollutions par retours d'eau, notamment articles 9 à 11. "
+    "Les opérations d'entretien des disconnecteurs sont réalisées a minima annuellement. "
+    "En cas de dysfonctionnement susceptible d'affecter la protection du réseau, "
+    "le propriétaire et le service des eaux doivent être informés dans le délai réglementaire."
+)
+TECHNICIAN_COMPETENCY = os.environ.get("TECHNICIAN_COMPETENCY", "").strip()
 
 allowed = os.environ.get("ALLOWED_TELEGRAM_USER_IDS", "").strip()
 ALLOWED_USER_IDS = {
@@ -1296,6 +1305,8 @@ def build_summary(data):
         "CONCLUSION / TRAÇABILITÉ",
         "Le présent contrôle porte sur le fonctionnement des organes accessibles et sur les mesures réellement relevées au jour de l'intervention.",
         SERVICE_LIMIT,
+        REGULATORY_NOTE,
+        *(["Justificatif opérateur : " + TECHNICIAN_COMPETENCY] if TECHNICIAN_COMPETENCY else []),
         "",
         "RÈGLE DE DEVIS : une pièce interne n'est proposée que si le contrôle l'a isolée avec suffisamment de certitude.",
         "Référence et tarif fournisseur doivent être vérifiés avant génération d'un devis.",
@@ -1677,6 +1688,7 @@ def invoice_pdf(control):
         "",
         "Les coûts internes, charges, frais généraux et marge ne sont pas détaillés sur la facture client.",
         SERVICE_LIMIT,
+        "Compte-rendu technique associé à conserver dans le suivi sanitaire / maintenance du site.",
         "Document généré à partir du contrôle archivé. À valider avant envoi."
     ]
     buf = pdf_from_lines("Facture maintenance / contrôle disconnecteur(s) — Aqualeo", lines)
@@ -1949,7 +1961,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.12 — grille DN + maintenance pro\n\n"
+        "👋 Discobot Aqualeo V0.13 — contrôle annuel + compétence opérateur\n\n"
         "1er passage : maintenance préventive + contrôle périodique + diagnostic.\n"
         "Rapport : mesures, vérification fonctionnelle, conclusion et traçabilité.\n"
         "2e passage : réparation uniquement si nécessaire et validée.\n\n"
