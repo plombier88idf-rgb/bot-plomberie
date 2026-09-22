@@ -1,7 +1,14 @@
+import base64
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
+
+try:
+    from openai import AsyncOpenAI
+except ImportError:
+    AsyncOpenAI = None
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, BotCommand
 from telegram.ext import (
@@ -17,6 +24,9 @@ from pricing import ensure_pricing_tables, find_prices
 
 TOKEN = os.environ.get("BOT_TOKEN")
 DB_PATH = os.environ.get("DB_PATH", "discobot.db")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna"
+AI_CLIENT = AsyncOpenAI(api_key=OPENAI_API_KEY) if (AsyncOpenAI and OPENAI_API_KEY) else None
 
 allowed = os.environ.get("ALLOWED_TELEGRAM_USER_IDS", "").strip()
 ALLOWED_USER_IDS = {
