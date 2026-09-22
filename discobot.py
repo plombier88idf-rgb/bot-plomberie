@@ -712,6 +712,47 @@ def site_detail(site_id):
     return {"site": site, "assets": assets}
 
 
+def preload_session_from_site_registry(session, site_id):
+    detail = site_detail(site_id)
+    if not detail:
+        return False
+    s = detail["site"]
+    _, client, site_name, address, contact_name, contact_email, contact_tel, _, _, _ = s
+    data = session["data"]
+    data["visit_type"] = "MAINTENANCE_CONTROLE_PERIODIQUE"
+    data["dossier_status"] = "CONTROLE_EN_COURS"
+    data["source_registry_site_id"] = int(site_id)
+    data["site"] = {
+        "client": client or site_name or "",
+        "site": site_name or client or "",
+        "adresse": address or "",
+        "contact_nom": contact_name or "",
+        "contact_email": contact_email or "",
+        "contact_tel": contact_tel or "",
+        "nombre_appareils": len(detail["assets"]) or 1,
+    }
+    prefills = []
+    for a in detail["assets"]:
+        aid, loc, brand, model, dtype, serial, dn, astatus, last_ctrl, next_ctrl = a
+        prefills.append({
+            "registry_asset_id": aid,
+            "emplacement": loc or "",
+            "marque": brand or "",
+            "modele": model or "",
+            "type": dtype or "",
+            "serie": serial or "",
+            "diametre": dn or "",
+            "historique_statut": astatus or "",
+            "dernier_controle": last_ctrl or "",
+        })
+    data["prefill_devices"] = prefills
+    data["current_device"] = {}
+    data["device_index"] = 1
+    prepare_device_prefill(data)
+    session["current_step"] = next_missing_step(session, 0)
+    return True
+
+
 def _short_date(value):
     if not value:
         return "—"
@@ -2754,7 +2795,39 @@ async def callback_cockpit(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"• #{aid} {loc or 'emplacement ?'} — {ident} — {astatus} "
                 f"— dernier {_short_date(last_ctrl)} — prochain {_short_date(next_ctrl)}"
             )
-        await query.message.reply_text("\n".join(lines))
+        site_buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🧰 Contrôler ce site", callback_data=f"desk:ctrlsite:{sid}")],
+            [InlineKeyboardButton("⬅️ Retour au parc", callback_data="desk:parc")],
+        ])
+        await query.message.reply_text("\n".join(lines), reply_markup=site_buttons)
+        return
+
+    if data.startswith("desk:ctrlsite:"):
+        try:
+            sid = int(data.rsplit(":", 1)[1])
+        except Exception:
+            return
+        existing = get_session(user_id, chat_id)
+        if existing:
+            await query.message.reply_text("Un dossier est déjà en cours. Utilise /resume ou /annuler.")
+            return
+        create_session(user_id, chat_id)
+        session = get_session(user_id, chat_id)
+        if not preload_session_from_site_registry(session, sid):
+            save_session(session, completed=True)
+            await query.message.reply_text("Site introuvable.")
+            return
+        save_session(session)
+        detail = site_detail(sid)
+        site_name = detail["site"][2] or detail["site"][1] or f"Site #{sid}"
+        await query.message.reply_text(
+            f"🧰 Contrôle ouvert depuis le parc : {site_name}.\n"
+            f"{len(detail['assets'])} appareil(s) préchargé(s).\n\n"
+            "Discobot garde l'identité et l'historique, mais redemande les photos et mesures du contrôle du jour."
+        )
+        await query.message.reply_text(build_intake_preview(session["data"]))
+        if session["current_step"] < len(ALL_STEPS):
+            await send_step(chat_id, session, context)
         return
 
 
@@ -2766,7 +2839,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     snap = cockpit_snapshot()
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.17 — cockpit terrain + parc technique\n\n"
+        "👋 Discobot Aqualeo V0.18 — parc → contrôle préchargé\n\n"
         f"🏢 {snap['sites']} site(s) — 🔩 {snap['assets']} appareil(s) — "
         f"🔴 {snap['anomalies']} anomalie(s) — ⏰ {snap['due_soon']} échéance(s) ≤45 j\n\n"
         "Le dossier se construit pendant l'intervention : photos, identité appareil, "
