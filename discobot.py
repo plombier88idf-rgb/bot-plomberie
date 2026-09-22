@@ -3,6 +3,10 @@ import json
 import os
 import re
 import sqlite3
+import io
+import smtplib
+import textwrap
+from email.message import EmailMessage
 from datetime import datetime, timezone
 
 try:
@@ -11,6 +15,8 @@ except ImportError:
     AsyncOpenAI = None
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, BotCommand
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -27,6 +33,18 @@ DB_PATH = os.environ.get("DB_PATH", "discobot.db")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna"
 AI_CLIENT = AsyncOpenAI(api_key=OPENAI_API_KEY) if (AsyncOpenAI and OPENAI_API_KEY) else None
+
+SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587") or "587")
+SMTP_USER = os.environ.get("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
+SMTP_FROM = os.environ.get("SMTP_FROM", SMTP_USER).strip()
+COMPANY_EMAIL = os.environ.get("COMPANY_EMAIL", "").strip()
+CONTROL_PRICE_HT = os.environ.get("CONTROL_PRICE_HT", "").strip()
+VAT_RATE = float(os.environ.get("VAT_RATE", "20") or "20")
+COMPANY_NAME = os.environ.get("COMPANY_NAME", "Plomberie Aqualeo").strip()
+COMPANY_PHONE = os.environ.get("COMPANY_PHONE", "06 13 14 20 90").strip()
+COMPANY_SIREN = os.environ.get("COMPANY_SIREN", "").strip()
 
 allowed = os.environ.get("ALLOWED_TELEGRAM_USER_IDS", "").strip()
 ALLOWED_USER_IDS = {
@@ -187,7 +205,7 @@ def persist_control(session):
     data = session["data"]
     site = data.get("site", {})
     con = connect_db()
-    con.execute("""
+    cur = con.execute("""
         INSERT INTO controls(
             session_id, client, site, address, site_contact, device_count,
             data, visit_type, created_at
@@ -208,8 +226,22 @@ def persist_control(session):
         data.get("visit_type", "CONTROL_DIAGNOSTIC"),
         now_iso(),
     ))
+    control_id = cur.lastrowid
     con.commit()
     con.close()
+    return control_id
+
+
+def load_control(control_id):
+    con = connect_db()
+    row = con.execute(
+        "SELECT id, data, created_at FROM controls WHERE id=?",
+        (int(control_id),)
+    ).fetchone()
+    con.close()
+    if not row:
+        return None
+    return {"id": row[0], "data": json.loads(row[1]), "created_at": row[2]}
 
 
 def allowed_user(user_id):
@@ -1188,6 +1220,182 @@ def build_summary(data):
     return "\n".join(lines)
 
 
+def safe_filename(value):
+    value = re.sub(r"[^A-Za-z0-9_-]+", "_", str(value or "controle"))
+    return value.strip("_") or "controle"
+
+
+def pdf_from_lines(title, lines):
+    buf = io.BytesIO()
+    pdf = canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
+    y = height - 45
+    pdf.setFont("Helvetica-Bold", 14)
+    pdf.drawString(45, y, title[:85])
+    y -= 26
+    pdf.setFont("Helvetica", 9)
+
+    for raw in lines:
+        wrapped = textwrap.wrap(str(raw), width=105, break_long_words=False, replace_whitespace=False) or [""]
+        for line in wrapped:
+            if y < 45:
+                pdf.showPage()
+                pdf.setFont("Helvetica", 9)
+                y = height - 45
+            pdf.drawString(45, y, line.encode("latin-1", "replace").decode("latin-1"))
+            y -= 12
+        y -= 2
+    pdf.save()
+    buf.seek(0)
+    return buf
+
+
+def report_pdf(control):
+    data = control["data"]
+    text = build_summary(data)
+    site = data.get("site", {})
+    name = safe_filename(site.get("site") or site.get("client") or f"controle_{control['id']}")
+    buf = pdf_from_lines("Rapport de contrôle disconnecteur(s) BA", text.splitlines())
+    buf.name = f"Rapport_Controle_{name}_{control['id']}.pdf"
+    return buf
+
+
+def invoice_pdf(control):
+    if not CONTROL_PRICE_HT:
+        return None, "Tarif du contrôle non configuré (CONTROL_PRICE_HT)."
+    try:
+        ht = float(CONTROL_PRICE_HT.replace(",", "."))
+    except Exception:
+        return None, "Tarif du contrôle invalide."
+    tva = round(ht * VAT_RATE / 100.0, 2)
+    ttc = round(ht + tva, 2)
+    data = control["data"]
+    site = data.get("site", {})
+    lines = [
+        COMPANY_NAME,
+        f"Téléphone : {COMPANY_PHONE}",
+        f"SIREN : {COMPANY_SIREN or 'à renseigner'}",
+        "",
+        f"FACTURE PROVISOIRE — Contrôle n° {control['id']}",
+        f"Client : {site.get('client','—')}",
+        f"Site : {site.get('site','—')}",
+        f"Adresse : {site.get('adresse','—')}",
+        "",
+        f"Contrôle / diagnostic disconnecteur(s) BA : {ht:.2f} € HT",
+        f"TVA {VAT_RATE:.1f}% : {tva:.2f} €",
+        f"TOTAL TTC : {ttc:.2f} €",
+        "",
+        "Document généré à partir du contrôle archivé. À valider avant envoi."
+    ]
+    buf = pdf_from_lines("Facture contrôle — Aqualeo", lines)
+    buf.name = f"Facture_Controle_{control['id']}.pdf"
+    return buf, None
+
+
+def diagnosed_part_needs(device):
+    needs = []
+    if valve_leaks(device.get("vanne_amont")):
+        needs.append(("vanne_amont", "Vanne amont extérieure"))
+    if component_anomaly(device.get("clapet_amont")):
+        needs.append(("clapet_amont", "Clapet amont"))
+    if component_anomaly(device.get("soupape_decharge")):
+        needs.append(("soupape_decharge", "Soupape / décharge"))
+    if valve_leaks(device.get("vanne_aval")):
+        needs.append(("vanne_aval", "Vanne aval extérieure"))
+    if component_anomaly(device.get("clapet_aval")):
+        needs.append(("clapet_aval", "Clapet aval"))
+    return needs
+
+
+def build_quote_draft(control):
+    data = control["data"]
+    lines = [
+        f"DEVIS À PRÉPARER — contrôle n° {control['id']}",
+        f"Client : {data.get('site',{}).get('client','—')}",
+        f"Site : {data.get('site',{}).get('site','—')}",
+        ""
+    ]
+    missing = False
+    con = connect_db()
+    for n, d in enumerate(data.get("devices", []), start=1):
+        needs = diagnosed_part_needs(d)
+        if not needs:
+            continue
+        ident = " ".join(str(d.get(k,"")).strip() for k in ("marque","modele","diametre") if d.get(k))
+        lines.append(f"Appareil {n} — {ident or 'identification incomplète'}")
+        for part_type, label in needs:
+            prices = find_prices(
+                con,
+                brand=d.get("marque"),
+                model=d.get("modele"),
+                dn=d.get("diametre"),
+                part_type=part_type,
+            )
+            fresh = [p for p in prices if p.get("fresh")]
+            if fresh:
+                p = min(fresh, key=lambda x: x["purchase_price_ht"])
+                lines.append(
+                    f"• {label} — réf. {p.get('part_ref') or '—'} — fournisseur {p.get('supplier')} "
+                    f"— achat {p.get('purchase_price_ht'):.2f} € HT — source vérifiée {p.get('checked_at')}"
+                )
+            else:
+                missing = True
+                lines.append(f"• {label} — PRIX/RÉFÉRENCE FOURNISSEUR À VÉRIFIER avant devis")
+        lines.append("")
+    con.close()
+
+    if len(lines) <= 4:
+        return None, "Aucune pièce n'est actuellement diagnostiquée à remplacer."
+    if missing:
+        lines.append("⚠️ Brouillon uniquement : au moins une pièce n'a pas encore de prix fournisseur vérifié.")
+    lines.append("Aucun prix de vente final n'est inventé automatiquement.")
+    buf = pdf_from_lines("Brouillon devis réparation — Aqualeo", lines)
+    buf.name = f"Brouillon_Devis_{control['id']}.pdf"
+    return buf, ("Brouillon généré ; prix fournisseur manquant pour au moins une ligne." if missing else None)
+
+
+def smtp_ready():
+    return all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, COMPANY_EMAIL])
+
+
+def send_email_with_attachments(to_email, subject, body, attachments, cc_email=None):
+    if not smtp_ready():
+        raise RuntimeError("Messagerie non configurée sur Discobot.")
+    msg = EmailMessage()
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_email
+    if cc_email:
+        msg["Cc"] = cc_email
+    msg["Subject"] = subject
+    msg.set_content(body)
+    for buf in attachments:
+        buf.seek(0)
+        msg.add_attachment(
+            buf.read(),
+            maintype="application",
+            subtype="pdf",
+            filename=getattr(buf, "name", "document.pdf"),
+        )
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.send_message(msg)
+
+
+def post_control_keyboard(control_id):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📄 Télécharger rapport", callback_data=f"post:report:{control_id}"),
+            InlineKeyboardButton("✉️ Envoyer rapport", callback_data=f"post:email_report:{control_id}"),
+        ],
+        [
+            InlineKeyboardButton("🧾 Préparer facture", callback_data=f"post:invoice:{control_id}"),
+            InlineKeyboardButton("🔧 Préparer devis", callback_data=f"post:quote:{control_id}"),
+        ],
+        [InlineKeyboardButton("📨 Envoyer rapport + facture", callback_data=f"post:email_all:{control_id}")],
+    ])
+
+
 def save_current_value(session, value):
     idx = session["current_step"]
     key, _, _, _ = get_step(idx)
@@ -1218,7 +1426,7 @@ async def complete_current_device(session, chat_id, context):
         await send_step(chat_id, session, context)
         return False
 
-    persist_control(session)
+    control_id = persist_control(session)
     session["current_step"] = len(ALL_STEPS)
     save_session(session, completed=True)
     summary = build_summary(data)
@@ -1226,7 +1434,12 @@ async def complete_current_device(session, chat_id, context):
         await context.bot.send_message(chat_id=chat_id, text=summary[i:i + 3900])
     await context.bot.send_message(
         chat_id=chat_id,
-        text="Le contrôle est archivé. Si une réparation est nécessaire, le 2e passage sera rattaché au même site/appareil."
+        text=(
+            "✅ Contrôle archivé.\n\n"
+            "Tu peux maintenant télécharger le rapport, préparer la facture, préparer un devis si une pièce est réellement diagnostiquée, "
+            "ou envoyer les documents. Aucun e-mail ne part sans appui sur un bouton d'envoi."
+        ),
+        reply_markup=post_control_keyboard(control_id),
     )
     return True
 
@@ -1275,7 +1488,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.8 — protocole + diagnostic auto\n\n"
+        "👋 Discobot Aqualeo V0.9 — contrôle + dossier intervention\n\n"
         "1er passage : contrôle + diagnostic.\n"
         "2e passage : intervention uniquement si nécessaire.\n\n"
         "Prix : aucune estimation fournisseur inventée. "
@@ -1649,6 +1862,87 @@ async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_step(chat_id, session, context)
 
 
+async def callback_post_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not allowed_user(query.from_user.id):
+        await query.answer("Accès non autorisé", show_alert=True)
+        return
+
+    parts = query.data.split(":")
+    if len(parts) != 3:
+        return
+    _, action, control_id = parts
+    control = load_control(control_id)
+    if not control:
+        await query.message.reply_text("Contrôle introuvable.")
+        return
+
+    data = control["data"]
+    client_email = str(data.get("site", {}).get("contact_email") or "").strip()
+
+    if action == "report":
+        buf = report_pdf(control)
+        await context.bot.send_document(chat_id=query.message.chat.id, document=buf, filename=buf.name)
+        return
+
+    if action == "invoice":
+        buf, err = invoice_pdf(control)
+        if err:
+            await query.message.reply_text("🧾 " + err)
+            return
+        await context.bot.send_document(chat_id=query.message.chat.id, document=buf, filename=buf.name)
+        return
+
+    if action == "quote":
+        buf, note = build_quote_draft(control)
+        if not buf:
+            await query.message.reply_text("🔧 " + note)
+            return
+        await context.bot.send_document(chat_id=query.message.chat.id, document=buf, filename=buf.name)
+        if note:
+            await query.message.reply_text("⚠️ " + note)
+        return
+
+    if action in {"email_report", "email_all"}:
+        if not client_email:
+            await query.message.reply_text(
+                "✉️ Aucun e-mail client n'est enregistré dans ce dossier. "
+                "Je n'envoie rien tant que l'adresse n'est pas connue."
+            )
+            return
+        if not smtp_ready():
+            await query.message.reply_text(
+                "✉️ L'envoi est prêt côté workflow, mais la messagerie du bot n'est pas encore configurée. "
+                "Aucun message n'a été envoyé."
+            )
+            return
+
+        attachments = [report_pdf(control)]
+        if action == "email_all":
+            inv, err = invoice_pdf(control)
+            if err:
+                await query.message.reply_text("🧾 Envoi bloqué : " + err)
+                return
+            attachments.append(inv)
+
+        try:
+            send_email_with_attachments(
+                client_email,
+                f"{COMPANY_NAME} — contrôle disconnecteur(s) — {data.get('site',{}).get('site','site')}",
+                "Bonjour,\n\nVeuillez trouver ci-joint les documents relatifs au contrôle réalisé.\n\nBien cordialement,\n" + COMPANY_NAME,
+                attachments,
+                cc_email=COMPANY_EMAIL,
+            )
+            await query.message.reply_text(
+                f"✅ E-mail envoyé à {client_email} avec copie à {COMPANY_EMAIL}."
+            )
+        except Exception as exc:
+            print(f"[Discobot] Envoi e-mail impossible: {exc}")
+            await query.message.reply_text("❌ Envoi impossible. Aucun envoi n'est considéré comme réussi.")
+        return
+
+
 async def post_init(application):
     await application.bot.set_my_commands([
         BotCommand("start", "Accueil Discobot"),
@@ -1680,6 +1974,7 @@ def main():
     app.add_handler(CommandHandler("tarifs", tarifs))
     app.add_handler(CallbackQueryHandler(callback_result, pattern=r"^result:"))
     app.add_handler(CallbackQueryHandler(callback_status, pattern=r"^status:"))
+    app.add_handler(CallbackQueryHandler(callback_post_control, pattern=r"^post:"))
     app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, receive))
 
     app.run_polling()
