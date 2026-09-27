@@ -326,6 +326,8 @@ BOILER_STEPS = [
      "Puissance nominale utile en kW ? Recopie la plaque / notice."),
     ("type_chaudiere", "Technologie", "text",
      "Type de chaudière ? Ex. classique, standard, basse température, condensation."),
+    ("bruleur_air_souffle", "Brûleur à air soufflé", "text",
+     "Si applicable : date, marque et modèle du brûleur à air soufflé. Sinon « non applicable »."),
     ("dernier_entretien", "Dernier entretien", "text",
      "Date du dernier entretien si disponible ? Sinon « inconnue »."),
     ("dernier_ramonage", "Dernier ramonage", "text",
@@ -420,16 +422,25 @@ def boiler_co_status(raw):
         return "NON ÉVALUÉ"
     value = float(m.group(0).replace(",", "."))
     if value < 10:
-        return "SITUATION NORMALE — CO ambiant < 10 ppm"
+        return "La situation est normale"
     if value < 50:
         return (
-            "ANOMALIE — CO ambiant entre 10 et 50 ppm : investigations complémentaires "
-            "nécessaires sur le tirage / l'évacuation des produits de combustion et la ventilation du local."
+            "Il y a anomalie de fonctionnement nécessitant impérativement des investigations complémentaires "
+            "concernant le tirage du conduit de fumée et la ventilation du local"
         )
     return (
-        "DANGER GRAVE ET IMMÉDIAT — CO ambiant ≥ 50 ppm : chaudière à maintenir à l'arrêt "
-        "jusqu'à recherche du dysfonctionnement et remise en service dans des conditions normales."
+        "Il y a un danger grave et imminent nécessitant la mise à l'arrêt de la chaudière "
+        "et la recherche du dysfonctionnement avant remise en service"
     )
+
+
+def boiler_nox_reference(data):
+    energy = str(data.get("energie") or "").lower()
+    if "gaz" in energy or "propane" in energy or "butane" in energy:
+        return "35 mg/kWh à 0 % O2"
+    if "fioul" in energy or "fuel" in energy or "liquide" in energy:
+        return "90 mg/kWh à 0 % O2"
+    return "Selon combustible — arrêté du 15 septembre 2009, annexe 3"
 
 
 def get_boiler_session(user_id, chat_id):
@@ -585,6 +596,7 @@ def boiler_attestation_lines(data, control_id):
         f"Mise en service : {v('mise_service')}",
         f"Puissance nominale : {v('puissance_kw')} kW",
         f"Technologie : {v('type_chaudiere')}",
+        f"Brûleur à air soufflé (si applicable) : {v('bruleur_air_souffle')}",
         f"Dernier entretien : {v('dernier_entretien')}",
         f"Dernier ramonage : {v('dernier_ramonage')}",
         "",
@@ -613,6 +625,7 @@ def boiler_attestation_lines(data, control_id):
         f"Rendement évalué : {v('rendement_pct')} %",
         f"Rendement de référence : {v('rendement_reference_pct')} %",
         f"Évaluation émissions NOx : {v('nox_eval')}",
+        f"Référence émissions NOx : {boiler_nox_reference(data)}",
         f"Évaluation du dimensionnement : {v('dimensionnement')}",
         f"Classe énergétique / situation : {v('classe_energie')}",
         "",
