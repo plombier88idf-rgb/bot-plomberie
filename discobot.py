@@ -293,6 +293,512 @@ STATUS_LABELS = {
 }
 
 
+
+# ---------------------------------------------------------------------------
+# MODULE CHAUDIERE — assistant terrain gaz 4–70 kW (V1)
+# Les seuils constructeur ne sont jamais inventés : marque + modèle sont
+# enregistrés et les valeurs spécifiques doivent venir de la notice fabricant.
+# Les seuils CO ambiant ci-dessous reprennent l'arrêté du 15 septembre 2009.
+# ---------------------------------------------------------------------------
+
+BOILER_STEPS = [
+    ("commanditaire_nom", "Commanditaire / client", "text",
+     "Nom du commanditaire / client ?"),
+    ("commanditaire_adresse", "Adresse du commanditaire", "text",
+     "Adresse du commanditaire ? Écris « idem installation » si c'est la même."),
+    ("installation_adresse", "Adresse de l'installation", "text",
+     "Adresse complète où se trouve la chaudière ?"),
+    ("local", "Local / emplacement", "text",
+     "Dans quel local est installée la chaudière ? Ex. cuisine, cellier, chaufferie."),
+    ("marque", "Marque", "text",
+     "Marque de la chaudière ? Ex. ELM Leblanc, Saunier Duval, Frisquet, Vaillant, Viessmann..."),
+    ("modele", "Modèle exact", "text",
+     "Modèle / référence exacte de la chaudière ? Recopie la plaque signalétique."),
+    ("energie", "Énergie", "text",
+     "Énergie ? Ex. gaz naturel, propane, fioul."),
+    ("evacuation", "Mode d'évacuation", "text",
+     "Mode d'évacuation des produits de combustion ? Ex. ventouse, conduit cheminée, VMC gaz."),
+    ("serie", "N° de série", "text",
+     "Numéro de série ? Écris « illisible » s'il n'est pas lisible."),
+    ("mise_service", "Mise en service", "text",
+     "Date ou année de mise en service si connue ? Sinon « inconnue »."),
+    ("puissance_kw", "Puissance nominale", "measure",
+     "Puissance nominale utile en kW ? Recopie la plaque / notice."),
+    ("type_chaudiere", "Technologie", "text",
+     "Type de chaudière ? Ex. classique, standard, basse température, condensation."),
+    ("dernier_entretien", "Dernier entretien", "text",
+     "Date du dernier entretien si disponible ? Sinon « inconnue »."),
+    ("dernier_ramonage", "Dernier ramonage", "text",
+     "Date du dernier ramonage si applicable et disponible ? Sinon « non applicable » ou « inconnue »."),
+    ("controle_visuel", "Contrôle visuel", "check",
+     "Contrôle visuel : état général, fuites eau/gaz apparentes, raccordements, fixation, traces de chauffe/corrosion."),
+    ("pression_eau_bar", "Pression circuit chauffage", "measure",
+     "Relève la pression du circuit chauffage en bar. Discobot n'applique pas de plage universelle : la cible dépend du modèle et de l'installation."),
+    ("embouement", "Circuit / embouement", "check",
+     "Contrôle de l'embouement du circuit de chauffage."),
+    ("purge", "Purge / air", "check",
+     "Purge des bulles d'air lorsque le purgeur est accessible et fonctionnel."),
+    ("circulateur", "Circulateur", "check",
+     "Vérifie le fonctionnement du circulateur."),
+    ("vase_expansion_bar", "Vase d'expansion", "text",
+     "Contrôle du vase d'expansion : état et pression de gonflage si mesurée. Indique la valeur et l'action réalisée."),
+    ("nettoyage", "Nettoyage chaudière", "check",
+     "Nettoyage selon la notice constructeur : corps de chauffe / brûleur / électrodes / ventilateur selon équipement."),
+    ("condensats", "Condensats / siphon", "check",
+     "Si chaudière à condensation : contrôle et nettoyage du siphon/évacuation condensats. Sinon Non applicable."),
+    ("evacuation_controle", "Conduit / ventouse / ventilation", "check",
+     "Contrôle du raccordement, de l'étanchéité et de l'état du système d'évacuation des produits de combustion et des amenées d'air accessibles."),
+    ("organes_securite", "Organes de sécurité", "check",
+     "Vérifie les organes de sécurité et l'absence d'anomalie apparente."),
+    ("regulation", "Régulation", "check",
+     "Vérifie la régulation : sondes, thermostat/programmation, cohérence de la température de départ si applicable."),
+    ("temp_depart_c", "Température départ", "measure",
+     "Température de départ chauffage relevée en °C si disponible ?"),
+    ("essai_service", "Essai chauffage / ECS", "check",
+     "Remise en service : essai chauffage et ECS selon équipement, contrôle allumage/modulation, absence de fuite et défaut."),
+    ("analyseur", "Appareil de mesure", "text",
+     "Marque + référence de l'analyseur / appareil de mesure utilisé ?"),
+    ("o2_pct", "O₂ fumées", "measure",
+     "Teneur en O₂ fumées (%) après entretien/réglage, si mesurée ?"),
+    ("co2_pct", "CO₂ fumées", "measure",
+     "Teneur en CO₂ fumées (%) après entretien/réglage, si mesurée ?"),
+    ("co_fumees_ppm", "CO fumées", "measure",
+     "CO fumées relevé (ppm) après entretien/réglage ?"),
+    ("temp_fumees_c", "Température fumées", "measure",
+     "Température des fumées relevée en °C ?"),
+    ("rendement_pct", "Rendement évalué", "measure",
+     "Rendement de la chaudière évalué (%) pour l'attestation ?"),
+    ("rendement_reference_pct", "Rendement de référence", "measure",
+     "Rendement de référence (%) correspondant à la meilleure technologie équivalente ?"),
+    ("nox_eval", "Évaluation NOx", "text",
+     "Évaluation des émissions NOx selon la technologie / classe de la chaudière ? Indique la valeur ou la classe utilisée."),
+    ("co_ambiant_ppm", "CO dans l'air ambiant", "measure",
+     "Mesure réglementaire CO ambiant en ppm : après entretien/réglage, chaudière à puissance nominale depuis au moins 3 min, sonde à env. 50 cm devant l'appareil pendant au moins 30 s."),
+    ("dimensionnement", "Dimensionnement", "text",
+     "Évaluation du dimensionnement par rapport aux besoins chauffage/ECS ? Ex. adapté, surdimensionné, à approfondir."),
+    ("classe_energie", "Classe énergétique", "text",
+     "Classe énergétique si applicable / disponible ? Sinon indique pourquoi non applicable ou déjà étiquetée."),
+    ("conseils", "Conseils au client", "text",
+     "Conseils de bon usage / améliorations possibles / intérêt éventuel du remplacement ?"),
+    ("observations", "Observations / anomalies", "text",
+     "Observations finales, pièces à prévoir ou anomalie à signaler ? Écris « RAS » si rien."),
+    ("intervenant", "Intervenant", "text",
+     "Nom et prénom de la personne ayant réalisé l'entretien ?"),
+]
+
+
+def boiler_brand_hint(data):
+    brand = str(data.get("marque") or "").lower()
+    model = str(data.get("modele") or "").strip()
+    if "elm" in brand or "leblanc" in brand:
+        detected = "ELM Leblanc"
+    elif "saunier" in brand:
+        detected = "Saunier Duval"
+    elif "frisquet" in brand:
+        detected = "Frisquet"
+    elif "vaillant" in brand:
+        detected = "Vaillant"
+    elif "viessmann" in brand:
+        detected = "Viessmann"
+    elif "de dietrich" in brand or "dietrich" in brand:
+        detected = "De Dietrich"
+    else:
+        detected = str(data.get("marque") or "marque non reconnue")
+    return (
+        f"🏷️ Profil détecté : {detected} — {model or 'modèle à préciser'}\n"
+        "Les valeurs constructeur (pression de service, CO₂/O₂ cible, pression gaz, "
+        "procédure de réglage, couples/joints, etc.) ne sont pas déduites de la marque seule. "
+        "Elles doivent être chargées depuis la notice du modèle exact."
+    )
+
+
+def boiler_co_status(raw):
+    if raw is None:
+        return "NON ÉVALUÉ"
+    m = re.search(r"-?\d+(?:[.,]\d+)?", str(raw))
+    if not m:
+        return "NON ÉVALUÉ"
+    value = float(m.group(0).replace(",", "."))
+    if value < 10:
+        return "SITUATION NORMALE — CO ambiant < 10 ppm"
+    if value < 50:
+        return (
+            "ANOMALIE — CO ambiant entre 10 et 50 ppm : investigations complémentaires "
+            "nécessaires sur le tirage / l'évacuation des produits de combustion et la ventilation du local."
+        )
+    return (
+        "DANGER GRAVE ET IMMÉDIAT — CO ambiant ≥ 50 ppm : chaudière à maintenir à l'arrêt "
+        "jusqu'à recherche du dysfonctionnement et remise en service dans des conditions normales."
+    )
+
+
+def get_boiler_session(user_id, chat_id):
+    con = connect_db()
+    row = con.execute("""
+        SELECT id, current_step, data
+        FROM boiler_sessions
+        WHERE user_id=? AND chat_id=? AND completed=0
+        ORDER BY id DESC LIMIT 1
+    """, (int(user_id), int(chat_id))).fetchone()
+    con.close()
+    if not row:
+        return None
+    return {"id": row[0], "current_step": row[1], "data": json.loads(row[2])}
+
+
+def create_boiler_session(user_id, chat_id):
+    now = now_iso()
+    data = {
+        "service": "ENTRETIEN_CHAUDIERE",
+        "created_at": now,
+        "visit_date": datetime.now().strftime("%d/%m/%Y"),
+    }
+    con = connect_db()
+    cur = con.execute("""
+        INSERT INTO boiler_sessions(user_id, chat_id, current_step, data, completed, created_at, updated_at)
+        VALUES (?, ?, 0, ?, 0, ?, ?)
+    """, (int(user_id), int(chat_id), json.dumps(data, ensure_ascii=False), now, now))
+    con.commit()
+    sid = cur.lastrowid
+    con.close()
+    return sid
+
+
+def save_boiler_session(session, completed=False):
+    con = connect_db()
+    con.execute("""
+        UPDATE boiler_sessions
+        SET current_step=?, data=?, completed=?, updated_at=?
+        WHERE id=?
+    """, (
+        int(session["current_step"]),
+        json.dumps(session["data"], ensure_ascii=False),
+        1 if completed else 0,
+        now_iso(),
+        int(session["id"]),
+    ))
+    con.commit()
+    con.close()
+
+
+def boiler_step_keyboard(step):
+    key, _, kind, _ = BOILER_STEPS[step]
+    if kind != "check":
+        return None
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Conforme / réalisé", callback_data=f"boiler:res:{key}:ok"),
+            InlineKeyboardButton("⚠️ Anomalie", callback_data=f"boiler:res:{key}:anomaly"),
+        ],
+        [InlineKeyboardButton("➖ Non applicable", callback_data=f"boiler:res:{key}:na")],
+    ])
+
+
+async def boiler_send_step(chat_id, session, context):
+    idx = int(session["current_step"])
+    if idx >= len(BOILER_STEPS):
+        return
+    key, label, kind, prompt = BOILER_STEPS[idx]
+    head = (
+        f"🔥 ENTRETIEN CHAUDIÈRE — {idx + 1}/{len(BOILER_STEPS)}\n"
+        f"{label}\n\n{prompt}"
+    )
+    if key == "modele":
+        brand = session["data"].get("marque")
+        if brand:
+            head += f"\n\nMarque déjà enregistrée : {brand}"
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=head,
+        reply_markup=boiler_step_keyboard(idx),
+    )
+
+
+def boiler_control_save(session):
+    data = session["data"]
+    con = connect_db()
+    cur = con.execute("""
+        INSERT INTO boiler_controls(
+            session_id, client, installation_address, brand, model, serial, data, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        int(session["id"]),
+        str(data.get("commanditaire_nom") or ""),
+        str(data.get("installation_adresse") or ""),
+        str(data.get("marque") or ""),
+        str(data.get("modele") or ""),
+        str(data.get("serie") or ""),
+        json.dumps(data, ensure_ascii=False),
+        now_iso(),
+    ))
+    con.commit()
+    cid = cur.lastrowid
+    con.close()
+    return cid
+
+
+def boiler_attestation_lines(data, control_id):
+    def v(key, default="—"):
+        raw = data.get(key)
+        if raw is None or str(raw).strip() == "":
+            return default
+        return str(raw)
+
+    checks = [
+        ("Contrôle visuel", "controle_visuel"),
+        ("Embouement", "embouement"),
+        ("Purge / air", "purge"),
+        ("Circulateur", "circulateur"),
+        ("Nettoyage chaudière", "nettoyage"),
+        ("Condensats / siphon", "condensats"),
+        ("Évacuation / ventilation", "evacuation_controle"),
+        ("Organes de sécurité", "organes_securite"),
+        ("Régulation", "regulation"),
+        ("Essai chauffage / ECS", "essai_service"),
+    ]
+
+    lines = [
+        f"ATTESTATION D'ENTRETIEN — dossier chaudière #{control_id}",
+        "Entretien annuel chaudière — données relevées par l'intervenant",
+        "",
+        "ENTREPRISE / INTERVENANT",
+        f"Entreprise : {COMPANY_NAME}",
+        f"Adresse : {COMPANY_ADDRESS or '—'}",
+        f"SIRET : {COMPANY_SIRET or '—'}",
+        f"Téléphone : {COMPANY_PHONE}",
+        f"E-mail : {COMPANY_EMAIL}",
+        f"Intervenant : {v('intervenant')}",
+        f"Date de visite : {v('visit_date')}",
+        "",
+        "COMMANDITAIRE / INSTALLATION",
+        f"Commanditaire : {v('commanditaire_nom')}",
+        f"Adresse commanditaire : {v('commanditaire_adresse')}",
+        f"Adresse installation : {v('installation_adresse')}",
+        f"Local / emplacement : {v('local')}",
+        "",
+        "IDENTIFICATION CHAUDIÈRE",
+        f"Marque : {v('marque')}",
+        f"Modèle : {v('modele')}",
+        f"Énergie : {v('energie')}",
+        f"Mode d'évacuation : {v('evacuation')}",
+        f"N° série : {v('serie')}",
+        f"Mise en service : {v('mise_service')}",
+        f"Puissance nominale : {v('puissance_kw')} kW",
+        f"Technologie : {v('type_chaudiere')}",
+        f"Dernier entretien : {v('dernier_entretien')}",
+        f"Dernier ramonage : {v('dernier_ramonage')}",
+        "",
+        "POINTS CONTRÔLÉS",
+    ]
+    for label, key in checks:
+        lines.append(f"• {label} : {v(key)}")
+
+    lines.extend([
+        "",
+        "CIRCUIT HYDRAULIQUE / MESURES",
+        f"Pression circuit chauffage : {v('pression_eau_bar')} bar",
+        f"Vase d'expansion : {v('vase_expansion_bar')}",
+        f"Température départ chauffage : {v('temp_depart_c')} °C",
+        "",
+        "COMBUSTION / APPAREILS DE MESURE",
+        f"Analyseur / appareil de mesure : {v('analyseur')}",
+        f"O₂ fumées : {v('o2_pct')} %",
+        f"CO₂ fumées : {v('co2_pct')} %",
+        f"CO fumées : {v('co_fumees_ppm')} ppm",
+        f"Température fumées : {v('temp_fumees_c')} °C",
+        f"CO air ambiant : {v('co_ambiant_ppm')} ppm",
+        f"Conclusion CO ambiant : {boiler_co_status(data.get('co_ambiant_ppm'))}",
+        "",
+        "ÉVALUATIONS RÉGLEMENTAIRES",
+        f"Rendement évalué : {v('rendement_pct')} %",
+        f"Rendement de référence : {v('rendement_reference_pct')} %",
+        f"Évaluation émissions NOx : {v('nox_eval')}",
+        f"Évaluation du dimensionnement : {v('dimensionnement')}",
+        f"Classe énergétique / situation : {v('classe_energie')}",
+        "",
+        "CONSEILS / OBSERVATIONS",
+        f"Conseils : {v('conseils')}",
+        f"Observations / anomalies : {v('observations')}",
+        "",
+        "Référence : arrêté du 15 septembre 2009 relatif à l'entretien annuel des chaudières de 4 à 400 kW, version en vigueur.",
+        "Les valeurs et opérations spécifiques au modèle doivent respecter la notice du constructeur.",
+        "",
+        "Signature de la personne ayant effectué la visite :",
+        "",
+        "____________________________________________",
+    ])
+    return lines
+
+
+def boiler_attestation_pdf(data, control_id):
+    ident = safe_filename(
+        "_".join(x for x in [str(data.get("marque") or ""), str(data.get("modele") or "")] if x)
+        or f"chaudiere_{control_id}"
+    )
+    buf = pdf_from_lines(
+        "ATTESTATION D'ENTRETIEN — CHAUDIÈRE",
+        boiler_attestation_lines(data, control_id),
+    )
+    buf.name = f"Attestation_Entretien_Chaudiere_{ident}_{control_id}.pdf"
+    return buf
+
+
+async def boiler_finish(session, chat_id, context):
+    cid = boiler_control_save(session)
+    save_boiler_session(session, completed=True)
+    pdf = boiler_attestation_pdf(session["data"], cid)
+    await context.bot.send_document(chat_id=chat_id, document=pdf, filename=pdf.name)
+    co_status = boiler_co_status(session["data"].get("co_ambiant_ppm"))
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f"✅ Entretien chaudière terminé — dossier #{cid}.\n"
+            "L'attestation PDF est préparée avec les valeurs saisies.\n\n"
+            f"CO ambiant : {co_status}\n\n"
+            "✍️ La signature de l'intervenant reste à apposer sur l'attestation si elle n'est pas gérée électroniquement."
+        ),
+    )
+
+
+async def chaudiere(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    if not allowed_user(user_id):
+        await update.effective_message.reply_text("Accès non autorisé.")
+        return
+    existing_boiler = get_boiler_session(user_id, chat_id)
+    if existing_boiler:
+        await update.effective_message.reply_text("🔥 Entretien chaudière en cours — reprise du dossier.")
+        await boiler_send_step(chat_id, existing_boiler, context)
+        return
+    if get_session(user_id, chat_id):
+        await update.effective_message.reply_text("Un dossier disconnecteur est déjà en cours. Termine-le ou utilise /annuler avant d'ouvrir une chaudière.")
+        return
+    create_boiler_session(user_id, chat_id)
+    session = get_boiler_session(user_id, chat_id)
+    await update.effective_message.reply_text(
+        "🔥 NOUVEL ENTRETIEN CHAUDIÈRE\n\n"
+        "Discobot va te guider étape par étape, enregistrer les contrôles et mesures, "
+        "interpréter le CO ambiant puis générer l'attestation PDF.\n\n"
+        "V1 : parcours optimisé pour chaudière gaz courante. Les valeurs fabricant restent liées au modèle exact."
+    )
+    await boiler_send_step(chat_id, session, context)
+
+
+async def callback_boiler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not allowed_user(query.from_user.id):
+        await query.answer("Accès non autorisé", show_alert=True)
+        return
+    user_id = query.from_user.id
+    chat_id = query.message.chat.id
+    data = query.data
+
+    if data == "boiler:start":
+        if get_session(user_id, chat_id):
+            await query.message.reply_text("Un dossier disconnecteur est déjà en cours. Utilise /annuler avant d'ouvrir une chaudière.")
+            return
+        session = get_boiler_session(user_id, chat_id)
+        if not session:
+            create_boiler_session(user_id, chat_id)
+            session = get_boiler_session(user_id, chat_id)
+        await query.message.reply_text("🔥 Entretien chaudière ouvert.")
+        await boiler_send_step(chat_id, session, context)
+        return
+
+    if data == "boiler:resume":
+        session = get_boiler_session(user_id, chat_id)
+        if not session:
+            await query.message.reply_text("Aucun entretien chaudière en cours.")
+            return
+        await boiler_send_step(chat_id, session, context)
+        return
+
+    if data.startswith("boiler:res:"):
+        parts = data.split(":")
+        if len(parts) != 4:
+            return
+        _, _, key, result = parts
+        session = get_boiler_session(user_id, chat_id)
+        if not session:
+            await query.message.reply_text("Aucun entretien chaudière en cours.")
+            return
+        idx = int(session["current_step"])
+        if idx >= len(BOILER_STEPS):
+            return
+        current_key = BOILER_STEPS[idx][0]
+        if current_key != key:
+            await query.answer("Cette étape n'est plus active.", show_alert=True)
+            return
+        labels = {
+            "ok": "Conforme / réalisé",
+            "anomaly": "Anomalie constatée",
+            "na": "Non applicable",
+        }
+        session["data"][key] = labels.get(result, result)
+        session["current_step"] = idx + 1
+        save_boiler_session(session)
+        if session["current_step"] >= len(BOILER_STEPS):
+            await boiler_finish(session, chat_id, context)
+        else:
+            await boiler_send_step(chat_id, session, context)
+        return
+
+
+async def boiler_receive(update: Update, context: ContextTypes.DEFAULT_TYPE, session):
+    msg = update.effective_message
+    chat_id = update.effective_chat.id
+    idx = int(session["current_step"])
+    if idx >= len(BOILER_STEPS):
+        await boiler_finish(session, chat_id, context)
+        return
+
+    key, label, kind, prompt = BOILER_STEPS[idx]
+
+    if msg.photo:
+        if key in {"marque", "modele", "serie"}:
+            session["data"].setdefault("plaque_photos", []).append({
+                "telegram_file_id": msg.photo[-1].file_id,
+                "file_unique_id": msg.photo[-1].file_unique_id,
+            })
+            save_boiler_session(session)
+            await msg.reply_text(
+                "📷 Photo de plaque archivée dans le dossier. "
+                "Pour cette V1, recopie maintenant la valeur demandée afin d'éviter toute lecture incertaine."
+            )
+        else:
+            await msg.reply_text("📷 Photo reçue. Pour cette étape, réponds aussi en texte afin que la valeur soit inscrite dans l'attestation.")
+        return
+
+    raw = (msg.text or "").strip()
+    if not raw:
+        await msg.reply_text("J'attends une réponse texte pour cette étape.")
+        return
+
+    if raw.lower() in {"annuler", "stop"}:
+        save_boiler_session(session, completed=True)
+        await msg.reply_text("Entretien chaudière clôturé sans attestation.")
+        return
+
+    session["data"][key] = raw
+
+    if key == "modele":
+        await msg.reply_text(boiler_brand_hint(session["data"]))
+
+    if key == "co_ambiant_ppm":
+        status = boiler_co_status(raw)
+        await msg.reply_text("🛡️ Lecture CO ambiant\n" + status)
+
+    session["current_step"] = idx + 1
+    save_boiler_session(session)
+
+    if session["current_step"] >= len(BOILER_STEPS):
+        await boiler_finish(session, chat_id, context)
+    else:
+        await boiler_send_step(chat_id, session, context)
+
+
 def now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -428,6 +934,32 @@ def connect_db():
             control_id INTEGER NOT NULL,
             created_at TEXT NOT NULL,
             PRIMARY KEY(user_id, chat_id)
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS boiler_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            current_step INTEGER NOT NULL DEFAULT 0,
+            data TEXT NOT NULL DEFAULT '{}',
+            completed INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS boiler_controls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            client TEXT,
+            installation_address TEXT,
+            brand TEXT,
+            model TEXT,
+            serial TEXT,
+            data TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )
     """)
     ensure_pricing_tables(con)
@@ -711,14 +1243,13 @@ def cockpit_snapshot():
 def cockpit_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📋 Nouveau repérage", callback_data="desk:newrep"),
-            InlineKeyboardButton("🧰 Nouveau contrôle", callback_data="desk:newctrl"),
+            InlineKeyboardButton("🔩 Disconnecteur", callback_data="desk:disconnecteur"),
+            InlineKeyboardButton("🔥 Chaudière", callback_data="desk:chaudiere"),
         ],
         [
             InlineKeyboardButton("🏢 Parc / sites", callback_data="desk:parc"),
             InlineKeyboardButton("⏰ À suivre", callback_data="desk:suivi"),
         ],
-        [InlineKeyboardButton("📋 Procédure BA", callback_data="procba:1")],
     ])
 
 
@@ -2889,8 +3420,33 @@ async def callback_cockpit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     chat_id = query.message.chat.id
 
+    if data == "desk:disconnecteur":
+        await query.message.reply_text(
+            "🔩 DISCONNECTEURS — choisis l'action :",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📋 Nouveau repérage", callback_data="desk:newrep"),
+                    InlineKeyboardButton("🧰 Nouveau contrôle", callback_data="desk:newctrl"),
+                ],
+                [InlineKeyboardButton("📋 Procédure BA", callback_data="procba:1")],
+            ]),
+        )
+        return
+
+    if data == "desk:chaudiere":
+        existing = get_boiler_session(user_id, chat_id)
+        rows = [[InlineKeyboardButton("🔥 Nouvel entretien chaudière", callback_data="boiler:start")]]
+        if existing:
+            rows.insert(0, [InlineKeyboardButton("▶️ Reprendre l'entretien en cours", callback_data="boiler:resume")])
+        await query.message.reply_text(
+            "🔥 CHAUDIÈRE\n\nParcours guidé d'entretien avec mesures, contrôle CO ambiant et attestation PDF.",
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
+        return
+
+
     if data in {"desk:newrep", "desk:newctrl"}:
-        existing = get_session(user_id, chat_id)
+        existing = get_session(user_id, chat_id) or get_boiler_session(user_id, chat_id)
         if existing:
             await query.message.reply_text("Un dossier est déjà en cours. Utilise /resume ou /annuler.")
             return
@@ -2995,7 +3551,7 @@ async def callback_cockpit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sid = int(data.rsplit(":", 1)[1])
         except Exception:
             return
-        existing = get_session(user_id, chat_id)
+        existing = get_session(user_id, chat_id) or get_boiler_session(user_id, chat_id)
         if existing:
             await query.message.reply_text("Un dossier est déjà en cours. Utilise /resume ou /annuler.")
             return
@@ -3027,7 +3583,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     snap = cockpit_snapshot()
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.20 — fiche papier archivable\n\n"
+        "👋 Discobot Aqualeo V0.21 — Disconnecteurs + Chaudières\n\n"
         f"🏢 {snap['sites']} site(s) — 🔩 {snap['assets']} appareil(s) — "
         f"🔴 {snap['anomalies']} anomalie(s) — ⏰ {snap['due_soon']} échéance(s) ≤45 j\n\n"
         "Le dossier se construit pendant l'intervention : photos, identité appareil, "
@@ -3043,7 +3599,7 @@ async def _start_session_mode(update, context, mode="MAINTENANCE_CONTROLE_PERIOD
     if not allowed_user(user_id):
         await update.effective_message.reply_text("Accès non autorisé.")
         return
-    existing = get_session(user_id, chat_id)
+    existing = get_session(user_id, chat_id) or get_boiler_session(user_id, chat_id)
     if existing:
         await update.effective_message.reply_text(
             "Un dossier est déjà en cours. Utilise /resume ou /annuler."
@@ -3084,9 +3640,14 @@ async def reperageauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    boiler_session = get_boiler_session(update.effective_user.id, update.effective_chat.id)
+    if boiler_session:
+        await update.effective_message.reply_text("🔥 Reprise de l'entretien chaudière.")
+        await boiler_send_step(update.effective_chat.id, boiler_session, context)
+        return
     session = get_session(update.effective_user.id, update.effective_chat.id)
     if not session:
-        await update.effective_message.reply_text("Aucun contrôle en cours. Utilise /nouveau.")
+        await update.effective_message.reply_text("Aucun contrôle en cours. Utilise /nouveau ou /chaudiere.")
         return
     session["current_step"] = next_missing_step(session, session["current_step"])
     save_session(session)
@@ -3096,6 +3657,11 @@ async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def annuler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    boiler_session = get_boiler_session(update.effective_user.id, update.effective_chat.id)
+    if boiler_session:
+        save_boiler_session(boiler_session, completed=True)
+        await update.effective_message.reply_text("Entretien chaudière clôturé sans attestation.")
+        return
     session = get_session(update.effective_user.id, update.effective_chat.id)
     if not session:
         await update.effective_message.reply_text("Aucun contrôle en cours.")
@@ -3265,6 +3831,11 @@ async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not allowed_user(user_id):
         await update.effective_message.reply_text("Accès non autorisé.")
+        return
+
+    active_boiler = get_boiler_session(user_id, chat_id)
+    if active_boiler:
+        await boiler_receive(update, context, active_boiler)
         return
 
     pending_paper = get_pending_paper_archive(user_id, chat_id)
@@ -3704,7 +4275,8 @@ async def post_init(application):
         BotCommand("sauvegarde", "Sauvegarder la base"),
         BotCommand("cockpit", "Cockpit terrain"),
         BotCommand("reperage", "Repérage puis devis"),
-        BotCommand("nouveau", "Nouveau contrôle"),
+        BotCommand("nouveau", "Nouveau contrôle disconnecteur"),
+        BotCommand("chaudiere", "Entretien chaudière guidé"),
         BotCommand("parc", "Sites et appareils"),
         BotCommand("suivi", "Anomalies, échéances, devis"),
         BotCommand("procedureba", "Guide BA ASTEE/CSTB"),
@@ -3737,6 +4309,7 @@ def main():
     app.add_handler(CommandHandler("parc", parc))
     app.add_handler(CommandHandler("suivi", suivi))
     app.add_handler(CommandHandler("nouveau", nouveau))
+    app.add_handler(CommandHandler("chaudiere", chaudiere))
     app.add_handler(CommandHandler("procedureba", procedureba))
     app.add_handler(CommandHandler("reperage", reperage))
     app.add_handler(CommandHandler("reperageauto", reperageauto))
@@ -3744,6 +4317,7 @@ def main():
     app.add_handler(CommandHandler("annuler", annuler))
     app.add_handler(CommandHandler("tarifs", tarifs))
     app.add_handler(CallbackQueryHandler(callback_cockpit, pattern=r"^desk:"))
+    app.add_handler(CallbackQueryHandler(callback_boiler, pattern=r"^boiler:"))
     app.add_handler(CallbackQueryHandler(callback_procedure_ba_result, pattern=r"^procbares:"))
     app.add_handler(CallbackQueryHandler(callback_procedure_ba, pattern=r"^procba:"))
     app.add_handler(CallbackQueryHandler(callback_result, pattern=r"^result:"))
