@@ -389,6 +389,88 @@ BOILER_STEPS = [
 ]
 
 
+
+# ---------------------------------------------------------------------------
+# MODULE PAC — assistant terrain pompe à chaleur air/eau (V1)
+# Parcours hydraulique + entretien courant. Les mesures non disponibles peuvent
+# être notées « non mesuré ». Aucune ouverture ni manipulation du circuit
+# frigorifique n'est prévue dans ce module.
+# ---------------------------------------------------------------------------
+
+PAC_STEPS = [
+    ("commanditaire_nom", "Client / commanditaire", "text",
+     "Nom du client / commanditaire ?"),
+    ("installation_adresse", "Adresse de l'installation", "text",
+     "Adresse complète où se trouve la pompe à chaleur ?"),
+    ("local", "Emplacement unité intérieure", "text",
+     "Où se trouve le module hydraulique / unité intérieure ? Ex. garage, cellier, chaufferie."),
+    ("marque", "Marque", "text",
+     "Marque de la PAC ? Ex. LG, Daikin, Atlantic, Mitsubishi Electric, Panasonic..."),
+    ("modele", "Modèle exact", "text",
+     "Modèle / référence exacte ? Recopie la plaque signalétique ou envoie une photo puis saisis la référence."),
+    ("serie", "N° de série", "text",
+     "Numéro de série ? Écris « illisible » si nécessaire."),
+    ("type_pac", "Type de PAC", "text",
+     "Type de PAC ? Ex. air/eau monobloc, air/eau bibloc."),
+    ("mise_service", "Mise en service", "text",
+     "Année / date de mise en service si connue ? Sinon « inconnue »."),
+    ("dernier_entretien", "Dernier entretien", "text",
+     "Date du dernier entretien si connue ? Sinon « inconnue »."),
+    ("controle_visuel", "Contrôle visuel général", "check",
+     "Contrôle visuel des unités intérieure et extérieure : état, fixation, corrosion, fuites d'eau apparentes, câbles et raccordements visibles."),
+    ("mise_securite", "Mise en sécurité", "check",
+     "Avant ouverture/nettoyage : arrêter l'appareil et isoler électriquement selon la procédure constructeur. Vérifier l'absence de remise en marche intempestive."),
+    ("echangeur_exterieur", "Échangeur extérieur", "check",
+     "Nettoyer délicatement l'échangeur extérieur : feuilles et poussières avec brosse douce, aspirateur ou soufflette à pression modérée. Ne pas écraser les ailettes."),
+    ("ventilateur", "Ventilateur extérieur", "check",
+     "Contrôler visuellement les pales, la grille, le jeu anormal, les frottements et les saletés. Nettoyer si nécessaire, appareil hors tension."),
+    ("condensats", "Condensats / évacuation", "check",
+     "Contrôler et nettoyer l'évacuation des condensats : écoulement libre, absence d'obstruction, stagnation ou fuite."),
+    ("hydraulique_fuites", "Circuit hydraulique / fuites", "check",
+     "Contrôler visuellement raccords, vannes, flexibles, purgeurs, circulateur, pot à boues/filtre et soupape. Rechercher toute fuite ou trace de suintement."),
+    ("pression_avant_bar", "Pression chauffage avant entretien", "measure",
+     "Relève la pression chauffage avant intervention en bar. Utilise le manomètre de l'installation. La valeur cible dépend de l'installation et de la notice."),
+    ("filtre_pot_boues", "Filtre / pot à boues", "check",
+     "Isoler si nécessaire puis nettoyer le filtre chauffage et/ou le pot à boues. Noter la quantité de dépôts et remettre correctement en service."),
+    ("aspect_eau", "Aspect de l'eau", "text",
+     "Aspect de l'eau lors de la vidange/nettoyage ? Ex. claire, noire, chargée, boues importantes."),
+    ("vase_expansion", "Vase d'expansion", "text",
+     "Contrôle du vase d'expansion : état, présence d'eau côté valve et pression de gonflage uniquement si elle est réellement mesurée dans les conditions adaptées. Sinon écris « contrôle visuel uniquement »."),
+    ("soupape_securite", "Soupape de sécurité", "check",
+     "Contrôler l'état apparent de la soupape et de son évacuation. Signaler fuite, blocage ou trace d'écoulement anormal."),
+    ("circulateur", "Circulateur", "check",
+     "Contrôler fonctionnement, bruit anormal, vibrations et circulation chauffage lors de la remise en service."),
+    ("rincage_circuit", "Vidange / rinçage circuit", "check",
+     "Si prévu dans l'intervention : vidanger et rincer le circuit jusqu'à amélioration nette de l'eau. Si non prévu, choisir Non applicable."),
+    ("remplissage_purge", "Remplissage / purge", "check",
+     "Remettre en eau progressivement, purger le réseau et les émetteurs, puis rétablir la pression adaptée à l'installation."),
+    ("nb_radiateurs", "Émetteurs purgés", "text",
+     "Combien de radiateurs / émetteurs ont été purgés ? Indique le nombre ou « non applicable »."),
+    ("pression_apres_bar", "Pression chauffage finale", "measure",
+     "Relève la pression finale à froid ou dans l'état de fonctionnement précisé, en bar."),
+    ("controle_electrique_visuel", "Contrôle électrique visuel", "check",
+     "Contrôle visuel uniquement : traces d'échauffement, oxydation, câbles ou connecteurs détériorés. Ne jamais travailler sous tension."),
+    ("intensite_a", "Intensité absorbée", "measure",
+     "Si tu disposes d'une pince ampèremétrique et que la mesure est prévue par la procédure constructeur, indique l'intensité en A. Sinon écris « non mesuré »."),
+    ("temp_depart_c", "Température départ chauffage", "measure",
+     "Température départ en °C : utilise la valeur affichée par la PAC si disponible. Si tu n'as pas de thermomètre et qu'aucune valeur n'est affichée, écris « non mesuré »."),
+    ("temp_retour_c", "Température retour chauffage", "measure",
+     "Température retour en °C : utilise la valeur affichée par la PAC si disponible. Sinon écris « non mesuré »."),
+    ("regulation", "Régulation / sondes", "check",
+     "Contrôler consigne, mode chauffage, thermostat/commande et cohérence des températures/sondes affichées. Noter tout code défaut."),
+    ("essai_service", "Remise en service / essai", "check",
+     "Remettre en service et lancer une demande de chauffage. Vérifier démarrage, circulation, bruit/vibrations, absence de fuite et absence de défaut."),
+    ("circuit_frigorifique_visuel", "Circuit frigorifique — visuel", "check",
+     "Contrôle visuel uniquement des liaisons accessibles : choc, corrosion, trace huileuse suspecte ou détérioration. Ce parcours ne prévoit ni ouverture, ni charge, ni récupération de fluide."),
+    ("codes_defaut", "Codes défaut / historique", "text",
+     "Code défaut présent ou historique visible ? Écris « aucun » si RAS."),
+    ("observations", "Observations / anomalies", "text",
+     "Observations finales, pièces à prévoir ou anomalies constatées ? Écris « RAS » si rien."),
+    ("intervenant", "Intervenant", "text",
+     "Nom et prénom de la personne ayant réalisé l'entretien ?"),
+]
+
+
 def boiler_brand_hint(data):
     brand = str(data.get("marque") or "").lower()
     model = str(data.get("modele") or "").strip()
@@ -684,8 +766,8 @@ async def chaudiere(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text("🔥 Entretien chaudière en cours — reprise du dossier.")
         await boiler_send_step(chat_id, existing_boiler, context)
         return
-    if get_session(user_id, chat_id):
-        await update.effective_message.reply_text("Un dossier disconnecteur est déjà en cours. Termine-le ou utilise /annuler avant d'ouvrir une chaudière.")
+    if get_session(user_id, chat_id) or get_pac_session(user_id, chat_id):
+        await update.effective_message.reply_text("Un autre dossier est déjà en cours. Termine-le ou utilise /annuler avant d'ouvrir une chaudière.")
         return
     create_boiler_session(user_id, chat_id)
     session = get_boiler_session(user_id, chat_id)
@@ -709,8 +791,8 @@ async def callback_boiler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     if data == "boiler:start":
-        if get_session(user_id, chat_id):
-            await query.message.reply_text("Un dossier disconnecteur est déjà en cours. Utilise /annuler avant d'ouvrir une chaudière.")
+        if get_session(user_id, chat_id) or get_pac_session(user_id, chat_id):
+            await query.message.reply_text("Un autre dossier est déjà en cours. Utilise /annuler avant d'ouvrir une chaudière.")
             return
         session = get_boiler_session(user_id, chat_id)
         if not session:
@@ -810,6 +892,371 @@ async def boiler_receive(update: Update, context: ContextTypes.DEFAULT_TYPE, ses
         await boiler_finish(session, chat_id, context)
     else:
         await boiler_send_step(chat_id, session, context)
+
+
+
+def get_pac_session(user_id, chat_id):
+    con = connect_db()
+    row = con.execute("""
+        SELECT id, current_step, data
+        FROM pac_sessions
+        WHERE user_id=? AND chat_id=? AND completed=0
+        ORDER BY id DESC LIMIT 1
+    """, (int(user_id), int(chat_id))).fetchone()
+    con.close()
+    if not row:
+        return None
+    return {"id": row[0], "current_step": row[1], "data": json.loads(row[2])}
+
+
+def create_pac_session(user_id, chat_id):
+    now = now_iso()
+    data = {
+        "service": "ENTRETIEN_PAC",
+        "created_at": now,
+        "visit_date": datetime.now().strftime("%d/%m/%Y"),
+    }
+    con = connect_db()
+    cur = con.execute("""
+        INSERT INTO pac_sessions(user_id, chat_id, current_step, data, completed, created_at, updated_at)
+        VALUES (?, ?, 0, ?, 0, ?, ?)
+    """, (int(user_id), int(chat_id), json.dumps(data, ensure_ascii=False), now, now))
+    con.commit()
+    sid = cur.lastrowid
+    con.close()
+    return sid
+
+
+def save_pac_session(session, completed=False):
+    con = connect_db()
+    con.execute("""
+        UPDATE pac_sessions
+        SET current_step=?, data=?, completed=?, updated_at=?
+        WHERE id=?
+    """, (
+        int(session["current_step"]),
+        json.dumps(session["data"], ensure_ascii=False),
+        1 if completed else 0,
+        now_iso(),
+        int(session["id"]),
+    ))
+    con.commit()
+    con.close()
+
+
+def pac_step_keyboard(step):
+    key, _, kind, _ = PAC_STEPS[step]
+    if kind != "check":
+        return None
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Conforme / réalisé", callback_data=f"pac:res:{key}:ok"),
+            InlineKeyboardButton("⚠️ Anomalie", callback_data=f"pac:res:{key}:anomaly"),
+        ],
+        [InlineKeyboardButton("➖ Non applicable", callback_data=f"pac:res:{key}:na")],
+    ])
+
+
+def _first_number(raw):
+    if raw is None:
+        return None
+    m = re.search(r"-?\d+(?:[.,]\d+)?", str(raw))
+    return float(m.group(0).replace(",", ".")) if m else None
+
+
+def pac_delta_t_text(data):
+    td = _first_number(data.get("temp_depart_c"))
+    tr = _first_number(data.get("temp_retour_c"))
+    if td is None or tr is None:
+        return "Non calculé — une ou deux températures non mesurées"
+    return f"{td - tr:.1f} °C (départ - retour)"
+
+
+async def pac_send_step(chat_id, session, context):
+    idx = int(session["current_step"])
+    if idx >= len(PAC_STEPS):
+        return
+    key, label, kind, prompt = PAC_STEPS[idx]
+    head = (
+        f"❄️ ENTRETIEN PAC — {idx + 1}/{len(PAC_STEPS)}\n"
+        f"{label}\n\n{prompt}"
+    )
+    if key == "modele":
+        brand = session["data"].get("marque")
+        if brand:
+            head += f"\n\nMarque déjà enregistrée : {brand}"
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=head,
+        reply_markup=pac_step_keyboard(idx),
+    )
+
+
+def pac_control_save(session):
+    data = session["data"]
+    con = connect_db()
+    cur = con.execute("""
+        INSERT INTO pac_controls(
+            session_id, client, installation_address, brand, model, serial, data, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        int(session["id"]),
+        str(data.get("commanditaire_nom") or ""),
+        str(data.get("installation_adresse") or ""),
+        str(data.get("marque") or ""),
+        str(data.get("modele") or ""),
+        str(data.get("serie") or ""),
+        json.dumps(data, ensure_ascii=False),
+        now_iso(),
+    ))
+    con.commit()
+    cid = cur.lastrowid
+    con.close()
+    return cid
+
+
+def pac_report_lines(data, control_id):
+    def v(key, default="—"):
+        raw = data.get(key)
+        if raw is None or str(raw).strip() == "":
+            return default
+        return str(raw)
+
+    checks = [
+        ("Contrôle visuel général", "controle_visuel"),
+        ("Mise en sécurité", "mise_securite"),
+        ("Échangeur extérieur", "echangeur_exterieur"),
+        ("Ventilateur extérieur", "ventilateur"),
+        ("Condensats / évacuation", "condensats"),
+        ("Circuit hydraulique / fuites", "hydraulique_fuites"),
+        ("Filtre / pot à boues", "filtre_pot_boues"),
+        ("Soupape de sécurité", "soupape_securite"),
+        ("Circulateur", "circulateur"),
+        ("Vidange / rinçage circuit", "rincage_circuit"),
+        ("Remplissage / purge", "remplissage_purge"),
+        ("Contrôle électrique visuel", "controle_electrique_visuel"),
+        ("Régulation / sondes", "regulation"),
+        ("Remise en service / essai", "essai_service"),
+        ("Circuit frigorifique — visuel uniquement", "circuit_frigorifique_visuel"),
+    ]
+
+    lines = [
+        f"COMPTE RENDU D'ENTRETIEN — dossier PAC #{control_id}",
+        "",
+        "ENTREPRISE / INTERVENANT",
+        f"Entreprise : {COMPANY_NAME}",
+        f"Adresse : {COMPANY_ADDRESS or '—'}",
+        f"SIRET : {COMPANY_SIRET or '—'}",
+        f"Téléphone : {COMPANY_PHONE}",
+        f"E-mail : {COMPANY_EMAIL}",
+        f"Intervenant : {v('intervenant')}",
+        f"Date de visite : {v('visit_date')}",
+        "",
+        "CLIENT / INSTALLATION",
+        f"Client : {v('commanditaire_nom')}",
+        f"Adresse installation : {v('installation_adresse')}",
+        f"Emplacement unité intérieure : {v('local')}",
+        "",
+        "IDENTIFICATION PAC",
+        f"Marque : {v('marque')}",
+        f"Modèle : {v('modele')}",
+        f"N° série : {v('serie')}",
+        f"Type : {v('type_pac')}",
+        f"Mise en service : {v('mise_service')}",
+        f"Dernier entretien : {v('dernier_entretien')}",
+        "",
+        "POINTS CONTRÔLÉS",
+    ]
+    for label, key in checks:
+        lines.append(f"• {label} : {v(key)}")
+
+    lines.extend([
+        "",
+        "CIRCUIT HYDRAULIQUE / MESURES",
+        f"Pression avant : {v('pression_avant_bar')} bar",
+        f"Aspect eau : {v('aspect_eau')}",
+        f"Vase d'expansion : {v('vase_expansion')}",
+        f"Émetteurs purgés : {v('nb_radiateurs')}",
+        f"Pression finale : {v('pression_apres_bar')} bar",
+        "",
+        "FONCTIONNEMENT / TEMPÉRATURES",
+        f"Intensité absorbée : {v('intensite_a')} A",
+        f"Température départ : {v('temp_depart_c')} °C",
+        f"Température retour : {v('temp_retour_c')} °C",
+        f"Delta T : {pac_delta_t_text(data)}",
+        f"Codes défaut : {v('codes_defaut')}",
+        "",
+        "OBSERVATIONS",
+        v("observations"),
+        "",
+        "Limite du parcours : contrôle frigorifique visuel uniquement.",
+        "Aucune ouverture, charge ou récupération de fluide frigorigène n'est déclarée par ce compte rendu.",
+        "Les valeurs et procédures spécifiques doivent respecter la notice du modèle exact.",
+    ])
+    return lines
+
+
+def pac_report_pdf(data, control_id):
+    ident = safe_filename(
+        "_".join(x for x in [str(data.get("marque") or ""), str(data.get("modele") or "")] if x)
+        or f"pac_{control_id}"
+    )
+    buf = pdf_from_lines(
+        "COMPTE RENDU D'ENTRETIEN — POMPE À CHALEUR",
+        pac_report_lines(data, control_id),
+    )
+    buf.name = f"Compte_rendu_Entretien_PAC_{ident}_{control_id}.pdf"
+    return buf
+
+
+async def pac_finish(session, chat_id, context):
+    cid = pac_control_save(session)
+    save_pac_session(session, completed=True)
+    pdf = pac_report_pdf(session["data"], cid)
+    await context.bot.send_document(chat_id=chat_id, document=pdf, filename=pdf.name)
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f"✅ Entretien PAC terminé — dossier #{cid}.\n"
+            "Le compte rendu PDF est prêt avec les opérations et mesures réellement saisies.\n\n"
+            f"ΔT : {pac_delta_t_text(session['data'])}\n\n"
+            "❄️ Circuit frigorifique : visuel uniquement dans ce parcours."
+        ),
+    )
+
+
+async def pac(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    if not allowed_user(user_id):
+        await update.effective_message.reply_text("Accès non autorisé.")
+        return
+    existing_pac = get_pac_session(user_id, chat_id)
+    if existing_pac:
+        await update.effective_message.reply_text("❄️ Entretien PAC en cours — reprise du dossier.")
+        await pac_send_step(chat_id, existing_pac, context)
+        return
+    if get_session(user_id, chat_id) or get_boiler_session(user_id, chat_id):
+        await update.effective_message.reply_text("Un autre dossier est déjà en cours. Termine-le ou utilise /annuler avant d'ouvrir une PAC.")
+        return
+    create_pac_session(user_id, chat_id)
+    session = get_pac_session(user_id, chat_id)
+    await update.effective_message.reply_text(
+        "❄️ NOUVEL ENTRETIEN POMPE À CHALEUR\n\n"
+        "Discobot te guide étape par étape : unité extérieure, hydraulique, filtre/pot à boues, "
+        "vase, soupape, circulateur, rinçage/purge, mesures disponibles et essai final.\n\n"
+        "Les mesures nécessitant un appareil que tu n'as pas peuvent être saisies « non mesuré ». "
+        "Le circuit frigorifique reste en contrôle visuel uniquement."
+    )
+    await pac_send_step(chat_id, session, context)
+
+
+async def callback_pac(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not allowed_user(query.from_user.id):
+        await query.answer("Accès non autorisé", show_alert=True)
+        return
+    user_id = query.from_user.id
+    chat_id = query.message.chat.id
+    data = query.data
+
+    if data == "pac:start":
+        if get_session(user_id, chat_id) or get_boiler_session(user_id, chat_id):
+            await query.message.reply_text("Un autre dossier est déjà en cours. Utilise /annuler avant d'ouvrir une PAC.")
+            return
+        session = get_pac_session(user_id, chat_id)
+        if not session:
+            create_pac_session(user_id, chat_id)
+            session = get_pac_session(user_id, chat_id)
+        await query.message.reply_text("❄️ Entretien PAC ouvert.")
+        await pac_send_step(chat_id, session, context)
+        return
+
+    if data == "pac:resume":
+        session = get_pac_session(user_id, chat_id)
+        if not session:
+            await query.message.reply_text("Aucun entretien PAC en cours.")
+            return
+        await pac_send_step(chat_id, session, context)
+        return
+
+    if data.startswith("pac:res:"):
+        parts = data.split(":")
+        if len(parts) != 4:
+            return
+        _, _, key, result = parts
+        session = get_pac_session(user_id, chat_id)
+        if not session:
+            await query.message.reply_text("Aucun entretien PAC en cours.")
+            return
+        idx = int(session["current_step"])
+        if idx >= len(PAC_STEPS):
+            return
+        current_key = PAC_STEPS[idx][0]
+        if current_key != key:
+            await query.answer("Cette étape n'est plus active.", show_alert=True)
+            return
+        labels = {
+            "ok": "Conforme / réalisé",
+            "anomaly": "Anomalie constatée",
+            "na": "Non applicable",
+        }
+        session["data"][key] = labels.get(result, result)
+        session["current_step"] = idx + 1
+        save_pac_session(session)
+        if session["current_step"] >= len(PAC_STEPS):
+            await pac_finish(session, chat_id, context)
+        else:
+            await pac_send_step(chat_id, session, context)
+        return
+
+
+async def pac_receive(update: Update, context: ContextTypes.DEFAULT_TYPE, session):
+    msg = update.effective_message
+    chat_id = update.effective_chat.id
+    idx = int(session["current_step"])
+    if idx >= len(PAC_STEPS):
+        await pac_finish(session, chat_id, context)
+        return
+
+    key, label, kind, prompt = PAC_STEPS[idx]
+
+    if msg.photo:
+        session["data"].setdefault("photos", []).append({
+            "telegram_file_id": msg.photo[-1].file_id,
+            "file_unique_id": msg.photo[-1].file_unique_id,
+            "etape": key,
+        })
+        save_pac_session(session)
+        if key in {"marque", "modele", "serie"}:
+            await msg.reply_text("📷 Photo de plaque archivée. Recopie maintenant la valeur demandée pour éviter une lecture incertaine.")
+        else:
+            await msg.reply_text("📷 Photo archivée pour cette étape. Utilise aussi le bouton de contrôle ou réponds en texte si une valeur est demandée.")
+        return
+
+    raw = (msg.text or "").strip()
+    if not raw:
+        await msg.reply_text("J'attends une réponse texte pour cette étape.")
+        return
+
+    if raw.lower() in {"annuler", "stop"}:
+        save_pac_session(session, completed=True)
+        await msg.reply_text("Entretien PAC clôturé sans compte rendu final.")
+        return
+
+    session["data"][key] = raw
+    session["current_step"] = idx + 1
+    save_pac_session(session)
+
+    if key in {"temp_depart_c", "temp_retour_c"}:
+        if _first_number(session["data"].get("temp_depart_c")) is not None and _first_number(session["data"].get("temp_retour_c")) is not None:
+            await msg.reply_text("🌡️ " + pac_delta_t_text(session["data"]))
+
+    if session["current_step"] >= len(PAC_STEPS):
+        await pac_finish(session, chat_id, context)
+    else:
+        await pac_send_step(chat_id, session, context)
 
 
 def now_iso():
@@ -964,6 +1411,32 @@ def connect_db():
     """)
     con.execute("""
         CREATE TABLE IF NOT EXISTS boiler_controls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            client TEXT,
+            installation_address TEXT,
+            brand TEXT,
+            model TEXT,
+            serial TEXT,
+            data TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pac_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            current_step INTEGER NOT NULL DEFAULT 0,
+            data TEXT NOT NULL DEFAULT '{}',
+            completed INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pac_controls (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id INTEGER NOT NULL,
             client TEXT,
@@ -1258,6 +1731,9 @@ def cockpit_keyboard():
         [
             InlineKeyboardButton("🔩 Disconnecteur", callback_data="desk:disconnecteur"),
             InlineKeyboardButton("🔥 Chaudière", callback_data="desk:chaudiere"),
+        ],
+        [
+            InlineKeyboardButton("❄️ Pompe à chaleur", callback_data="desk:pac"),
         ],
         [
             InlineKeyboardButton("🏢 Parc / sites", callback_data="desk:parc"),
@@ -3458,8 +3934,20 @@ async def callback_cockpit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
+
+    if data == "desk:pac":
+        existing = get_pac_session(user_id, chat_id)
+        rows = [[InlineKeyboardButton("❄️ Nouvel entretien PAC", callback_data="pac:start")]]
+        if existing:
+            rows.insert(0, [InlineKeyboardButton("▶️ Reprendre l'entretien PAC", callback_data="pac:resume")])
+        await query.message.reply_text(
+            "❄️ POMPE À CHALEUR\n\nParcours guidé d'entretien : unité extérieure, hydraulique, rinçage/purge, mesures disponibles et compte rendu PDF.",
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
+        return
+
     if data in {"desk:newrep", "desk:newctrl"}:
-        existing = get_session(user_id, chat_id) or get_boiler_session(user_id, chat_id)
+        existing = get_session(user_id, chat_id) or get_boiler_session(user_id, chat_id) or get_pac_session(user_id, chat_id)
         if existing:
             await query.message.reply_text("Un dossier est déjà en cours. Utilise /resume ou /annuler.")
             return
@@ -3564,7 +4052,7 @@ async def callback_cockpit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sid = int(data.rsplit(":", 1)[1])
         except Exception:
             return
-        existing = get_session(user_id, chat_id) or get_boiler_session(user_id, chat_id)
+        existing = get_session(user_id, chat_id) or get_boiler_session(user_id, chat_id) or get_pac_session(user_id, chat_id)
         if existing:
             await query.message.reply_text("Un dossier est déjà en cours. Utilise /resume ou /annuler.")
             return
@@ -3596,7 +4084,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     snap = cockpit_snapshot()
     await update.effective_message.reply_text(
-        "👋 Discobot Aqualeo V0.21 — Disconnecteurs + Chaudières\n\n"
+        "👋 Discobot Aqualeo V0.22 — Disconnecteurs + Chaudières + PAC\n\n"
         f"🏢 {snap['sites']} site(s) — 🔩 {snap['assets']} appareil(s) — "
         f"🔴 {snap['anomalies']} anomalie(s) — ⏰ {snap['due_soon']} échéance(s) ≤45 j\n\n"
         "Le dossier se construit pendant l'intervention : photos, identité appareil, "
@@ -3653,6 +4141,11 @@ async def reperageauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pac_session = get_pac_session(update.effective_user.id, update.effective_chat.id)
+    if pac_session:
+        await update.effective_message.reply_text("❄️ Reprise de l'entretien PAC.")
+        await pac_send_step(update.effective_chat.id, pac_session, context)
+        return
     boiler_session = get_boiler_session(update.effective_user.id, update.effective_chat.id)
     if boiler_session:
         await update.effective_message.reply_text("🔥 Reprise de l'entretien chaudière.")
@@ -3660,7 +4153,7 @@ async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     session = get_session(update.effective_user.id, update.effective_chat.id)
     if not session:
-        await update.effective_message.reply_text("Aucun contrôle en cours. Utilise /nouveau ou /chaudiere.")
+        await update.effective_message.reply_text("Aucun contrôle en cours. Utilise /nouveau, /chaudiere ou /pac.")
         return
     session["current_step"] = next_missing_step(session, session["current_step"])
     save_session(session)
@@ -3670,6 +4163,11 @@ async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def annuler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pac_session = get_pac_session(update.effective_user.id, update.effective_chat.id)
+    if pac_session:
+        save_pac_session(pac_session, completed=True)
+        await update.effective_message.reply_text("Entretien PAC clôturé sans compte rendu final.")
+        return
     boiler_session = get_boiler_session(update.effective_user.id, update.effective_chat.id)
     if boiler_session:
         save_boiler_session(boiler_session, completed=True)
@@ -3844,6 +4342,11 @@ async def receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not allowed_user(user_id):
         await update.effective_message.reply_text("Accès non autorisé.")
+        return
+
+    active_pac = get_pac_session(user_id, chat_id)
+    if active_pac:
+        await pac_receive(update, context, active_pac)
         return
 
     active_boiler = get_boiler_session(user_id, chat_id)
@@ -4290,6 +4793,7 @@ async def post_init(application):
         BotCommand("reperage", "Repérage puis devis"),
         BotCommand("nouveau", "Nouveau contrôle disconnecteur"),
         BotCommand("chaudiere", "Entretien chaudière guidé"),
+        BotCommand("pac", "Entretien pompe à chaleur guidé"),
         BotCommand("parc", "Sites et appareils"),
         BotCommand("suivi", "Anomalies, échéances, devis"),
         BotCommand("procedureba", "Guide BA ASTEE/CSTB"),
@@ -4323,6 +4827,7 @@ def main():
     app.add_handler(CommandHandler("suivi", suivi))
     app.add_handler(CommandHandler("nouveau", nouveau))
     app.add_handler(CommandHandler("chaudiere", chaudiere))
+    app.add_handler(CommandHandler("pac", pac))
     app.add_handler(CommandHandler("procedureba", procedureba))
     app.add_handler(CommandHandler("reperage", reperage))
     app.add_handler(CommandHandler("reperageauto", reperageauto))
@@ -4331,6 +4836,7 @@ def main():
     app.add_handler(CommandHandler("tarifs", tarifs))
     app.add_handler(CallbackQueryHandler(callback_cockpit, pattern=r"^desk:"))
     app.add_handler(CallbackQueryHandler(callback_boiler, pattern=r"^boiler:"))
+    app.add_handler(CallbackQueryHandler(callback_pac, pattern=r"^pac:"))
     app.add_handler(CallbackQueryHandler(callback_procedure_ba_result, pattern=r"^procbares:"))
     app.add_handler(CallbackQueryHandler(callback_procedure_ba, pattern=r"^procba:"))
     app.add_handler(CallbackQueryHandler(callback_result, pattern=r"^result:"))
